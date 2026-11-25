@@ -7,7 +7,7 @@ import {
   type CompensationRecord,
 } from './compensation.js';
 import { findLinkableRequisition } from './requisitions.js';
-import { requireHrManager, roleOf } from './roles.js';
+import { type PortalRole, requireHrManager, roleOf } from './roles.js';
 
 // AB#new-hire-draft: the departments a new hire can be assigned to.
 export const DEPARTMENTS = ['Engineering', 'Finance', 'HR', 'Operations', 'Sales'] as const;
@@ -39,7 +39,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 // Local calendar date of the server as YYYY-MM-DD.
-function todayIsoDate(): string {
+export function todayIsoDate(): string {
   const now = new Date();
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
@@ -194,6 +194,200 @@ export const onBodyError: ErrorRequestHandler = (err, _req, res, next) => {
   next(err);
 };
 
+// AB#status-workflow, criterion 1: the statuses a new hire can have.
+export const STATUSES = ['draft', 'in_review', 'returned', 'approved'] as const;
+export type Status = (typeof STATUSES)[number];
+
+// AB#status-workflow: the actions, who may perform each one, and the statuses it moves from and to.
+export const ACTIONS = ['submit', 'approve', 'return'] as const;
+export type Action = (typeof ACTIONS)[number];
+
+interface ActionRule {
+  roles: readonly PortalRole[];
+  from: readonly Status[];
+  to: Status;
+}
+
+const ACTION_RULES: Record<Action, ActionRule> = {
+  submit: { roles: ['hr_coordinator', 'hr_manager'], from: ['draft', 'returned'], to: 'in_review' },
+  approve: { roles: ['hr_manager'], from: ['in_review'], to: 'approved' },
+  return: { roles: ['hr_manager'], from: ['in_review'], to: 'returned' },
+};
+
+// AB#status-workflow, criterion 6: a return comment is required and limited to 500 characters.
+const COMMENT_MAX_LENGTH = 500;
+
+function isAction(value: unknown): value is Action {
+  return typeof value === 'string' && (ACTIONS as readonly string[]).includes(value);
+}
+
+// Actions the role may perform from the given status.
+function allowedActionsFor(role: PortalRole, status: string): Action[] {
+  return ACTIONS.filter(
+    (action) =>
+      ACTION_RULES[action].roles.includes(role) &&
+      (ACTION_RULES[action].from as readonly string[]).includes(status),
+  );
+}
+
+function objectOf(body: unknown): Record<string, unknown> {
+  return typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
+}
+
+interface ActionRequest {
+  action: Action;
+  expectedStatus: string;
+  comment: string | null;
+}
+
+// Checks the action body and reports every invalid field. Nothing is changed on failure.
+function validateActionRequest(
+  source: Record<string, unknown>,
+  action: Action,
+): { request: ActionRequest } | { errors: Partial<Record<'expectedStatus' | 'comment', string>> } {
+  const errors: Partial<Record<'expectedStatus' | 'comment', string>> = {};
+
+  const expectedStatus = source.expectedStatus;
+  if (typeof expectedStatus !== 'string' || expectedStatus.trim() === '') {
+    errors.expectedStatus = 'Send the status the new hire currently has.';
+  }
+
+  let comment: string | null = null;
+  const rawComment = source.comment;
+  if (rawComment !== undefined && rawComment !== null) {
+    if (typeof rawComment !== 'string') {
+      errors.comment = 'Enter the comment as text.';
+    } else {
+      // AB#status-workflow, criterion 6: the length is checked on the raw comment, before trimming.
+      if (Array.from(rawComment).length > COMMENT_MAX_LENGTH) {
+        errors.comment = `Comment must be ${COMMENT_MAX_LENGTH} characters or fewer.`;
+      } else if (rawComment.trim() !== '') {
+        comment = rawComment.trim();
+      }
+    }
+  }
+  // AB#status-workflow, criterion 6: returning a new hire needs a comment.
+  if (action === 'return' && comment === null && errors.comment === undefined) {
+    errors.comment = 'Enter a comment explaining what needs to change.';
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return { errors };
+  }
+  return { request: { action, expectedStatus: expectedStatus as string, comment } };
+}
+
+// AB#status-workflow, criteria 5 and 6: conditions that block an action. Every failing reason is returned.
+function actionBlockers(db: DatabaseSync, id: number, action: Action): string[] {
+  const reasons: string[] = [];
+  if (action === 'submit') {
+    const row = db.prepare('SELECT requisition_id, start_date FROM new_hires WHERE id = ?').get(id);
+    if (!row) {
+      return ['The new hire could not be found.'];
+    }
+    if (row.requisition_id === null) {
+      reasons.push('The new hire must be linked to a requisition before it is submitted.');
+    }
+    if (String(row.start_date) < todayIsoDate()) {
+      reasons.push('The start date is before today. Set a start date from today onward.');
+    }
+  }
+  if (action === 'approve' && readCompensation(db, id) === null) {
+    reasons.push('Compensation is required before approval.');
+  }
+  return reasons;
+}
+
+// AB#status-workflow, criterion 2: the status change and its history entry are written in one transaction.
+// Returns false when the status was no longer the expected one, so nothing is written.
+function recordTransition(
+  db: DatabaseSync,
+  id: number,
+  from: Status,
+  request: ActionRequest,
+  role: PortalRole,
+): boolean {
+  const to = ACTION_RULES[request.action].to;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const updated = db
+      .prepare(
+        `UPDATE new_hires
+         SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ? AND status = ?`,
+      )
+      .run(to, id, from);
+    if (Number(updated.changes) !== 1) {
+      db.exec('ROLLBACK');
+      return false;
+    }
+    db.prepare(
+      `INSERT INTO new_hire_status_history (new_hire_id, from_status, to_status, action, role, comment)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(id, from, to, request.action, role, request.comment);
+    db.exec('COMMIT');
+    return true;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+// AB#status-workflow, criterion 7: history rows for one new hire, oldest first.
+export interface StatusHistoryEntry {
+  id: number;
+  fromStatus: string;
+  toStatus: string;
+  action: string;
+  role: string;
+  comment: string | null;
+  createdAt: string;
+}
+
+function toHistoryEntry(row: Row): StatusHistoryEntry {
+  return {
+    id: Number(row.id),
+    fromStatus: String(row.from_status),
+    toStatus: String(row.to_status),
+    action: String(row.action),
+    role: String(row.role),
+    comment: row.comment === null ? null : String(row.comment),
+    createdAt: String(row.created_at),
+  };
+}
+
+function readStatus(db: DatabaseSync, id: number): string | null {
+  const row = db.prepare('SELECT status FROM new_hires WHERE id = ?').get(id);
+  return row ? String(row.status) : null;
+}
+
+// The detail view for one role. Compensation is included for hr_manager only.
+function readDetail(db: DatabaseSync, id: number, role: PortalRole): NewHireDetail | null {
+  const row = db
+    .prepare(
+      `SELECT n.id, n.first_name, n.last_name, n.personal_email, n.job_title, n.department,
+              n.start_date, n.status, n.requisition_id, n.created_at, n.updated_at,
+              r.number AS requisition_number
+       FROM new_hires n
+       LEFT JOIN requisitions r ON r.id = n.requisition_id
+       WHERE n.id = ?`,
+    )
+    .get(id);
+  if (!row) {
+    return null;
+  }
+
+  const record: NewHireDetail = {
+    ...toRecord(row),
+    requisitionNumber: row.requisition_number === null ? null : String(row.requisition_number),
+  };
+  // AB#comp-view, criterion 3: the compensation field is added for hr_manager only, so it is absent otherwise.
+  if (role === 'hr_manager') {
+    record.compensation = readCompensation(db, id);
+  }
+  return record;
+}
+
 export function createNewHiresRouter(db: DatabaseSync): Router {
   const router = Router();
 
@@ -271,33 +465,112 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
   // AB#comp-view, criteria 1, 2 and 3: full record with requisition number; unknown id gives 404.
   router.get('/:id', (req, res) => {
     const id = idParam(req.params.id);
-    const row =
-      id === null
-        ? undefined
-        : db
-            .prepare(
-              `SELECT n.id, n.first_name, n.last_name, n.personal_email, n.job_title, n.department,
-                      n.start_date, n.status, n.requisition_id, n.created_at, n.updated_at,
-                      r.number AS requisition_number
-               FROM new_hires n
-               LEFT JOIN requisitions r ON r.id = n.requisition_id
-               WHERE n.id = ?`,
-            )
-            .get(id);
-    if (!row) {
+    const record = id === null ? null : readDetail(db, id, roleOf(res));
+    if (!record) {
+      res.status(404).json({ error: 'New hire not found.' });
+      return;
+    }
+    res.json(record);
+  });
+
+  // AB#status-workflow, criterion 7: the status history, oldest first. Unknown id gives 404.
+  router.get('/:id/history', (req, res) => {
+    const id = idParam(req.params.id);
+    if (id === null || readStatus(db, id) === null) {
+      res.status(404).json({ error: 'New hire not found.' });
+      return;
+    }
+    const rows = db
+      .prepare(
+        `SELECT id, from_status, to_status, action, role, comment, created_at
+         FROM new_hire_status_history
+         WHERE new_hire_id = ?
+         ORDER BY id ASC`,
+      )
+      .all(id);
+    res.json(rows.map(toHistoryEntry));
+  });
+
+  // AB#status-workflow, criteria 2 to 6: submit, approve or return a new hire.
+  // Order of checks: unknown id (404), unknown action (400), role (403), body (400),
+  // stale expectedStatus (409), status not allowed for the action (409), blocking conditions (409).
+  router.post('/:id/actions', express.json(), (req, res) => {
+    const id = idParam(req.params.id);
+    const current = id === null ? null : readStatus(db, id);
+    if (id === null || current === null) {
       res.status(404).json({ error: 'New hire not found.' });
       return;
     }
 
-    const record: NewHireDetail = {
-      ...toRecord(row),
-      requisitionNumber: row.requisition_number === null ? null : String(row.requisition_number),
-    };
-    // AB#comp-view, criterion 3: the compensation field is added for hr_manager only, so it is absent otherwise.
-    if (roleOf(res) === 'hr_manager') {
-      record.compensation = readCompensation(db, Number(row.id));
+    const source = objectOf(req.body);
+    if (!isAction(source.action)) {
+      res.status(400).json({ errors: { action: `Choose one of: ${ACTIONS.join(', ')}.` } });
+      return;
     }
-    res.json(record);
+    const action = source.action;
+
+    // AB#status-workflow, criterion 4: an action the role may never perform gets 403 and changes nothing.
+    const role = roleOf(res);
+    if (!ACTION_RULES[action].roles.includes(role)) {
+      res.status(403).json({ error: 'Your role cannot perform this action.' });
+      return;
+    }
+
+    const validation = validateActionRequest(source, action);
+    if ('errors' in validation) {
+      res.status(400).json({ errors: validation.errors });
+      return;
+    }
+    const { request } = validation;
+
+    // AB#status-workflow, criterion 5: a stale view gets 409 with the current status.
+    if (request.expectedStatus !== current) {
+      res.status(409).json({
+        error: 'The new hire has changed since it was loaded. Reload to see its current status.',
+        currentStatus: current,
+        allowedActions: allowedActionsFor(role, current),
+      });
+      return;
+    }
+
+    // AB#status-workflow, criterion 3: an action not allowed from the current status gets 409.
+    if (!(ACTION_RULES[action].from as readonly string[]).includes(current)) {
+      res.status(409).json({
+        error: 'This action is not allowed from the current status.',
+        currentStatus: current,
+        allowedActions: allowedActionsFor(role, current),
+      });
+      return;
+    }
+
+    // AB#status-workflow, criterion 6: submit and approve list every reason they are blocked.
+    const reasons = actionBlockers(db, id, action);
+    if (reasons.length > 0) {
+      res.status(409).json({
+        error: 'This action cannot be completed yet.',
+        reasons,
+        currentStatus: current,
+        allowedActions: allowedActionsFor(role, current),
+      });
+      return;
+    }
+
+    if (!recordTransition(db, id, current as Status, request, role)) {
+      // The status changed between the read above and the write, so nothing was written.
+      const latest = readStatus(db, id) ?? current;
+      res.status(409).json({
+        error: 'The new hire has changed since it was loaded. Reload to see its current status.',
+        currentStatus: latest,
+        allowedActions: allowedActionsFor(role, latest),
+      });
+      return;
+    }
+
+    const updated = readDetail(db, id, role);
+    if (!updated) {
+      throw new Error('Updated new hire could not be read back.');
+    }
+    res.status(200).json(updated);
   });
 
   // AB#comp-set, criteria 4, 5 and 6: hr_manager creates or replaces compensation; other roles get 403.

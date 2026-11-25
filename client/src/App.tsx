@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
-import { currentPath, Link } from './navigation';
+import { useEffect, useState, type ReactElement } from 'react';
+import { NewHireDetailPage } from './NewHireDetail';
 import { NewHireFormPage } from './NewHireForm';
 import { NewHireListPage } from './NewHireList';
+import { currentPath, Link } from './navigation';
+import { getPortalRole, portalHeaders, setPortalRole, type PortalRole } from './role';
+import { RoleSwitcher } from './RoleSwitcher';
 
 interface Health {
   status: string;
@@ -20,7 +23,7 @@ function isHealth(value: unknown): value is Health {
 // A 503 response still carries the JSON body, so it is read like a normal reply.
 async function loadHealth(signal: AbortSignal): Promise<Health> {
   try {
-    const response = await fetch('/api/health', { signal });
+    const response = await fetch('/api/health', { signal, headers: portalHeaders() });
     const body: unknown = await response.json();
     if (isHealth(body)) {
       return body;
@@ -59,9 +62,19 @@ function HomePage() {
   );
 }
 
+// AB#new-hire-draft: the detail page path, /new-hires/<id>.
+const DETAIL_PATH = /^\/new-hires\/(\d+)$/;
+
 export function App() {
   // AB#new-hire-draft: a small path switch; the pages are few, so no router package is needed.
   const [path, setPath] = useState(currentPath);
+  // AB#comp-role-switch, criterion 6: the development role is kept in storage and sent on every request.
+  const [role, setRole] = useState<PortalRole>(getPortalRole);
+
+  function changeRole(next: PortalRole) {
+    setPortalRole(next);
+    setRole(next);
+  }
 
   useEffect(() => {
     const onLocationChange = () => setPath(currentPath());
@@ -73,11 +86,24 @@ export function App() {
     };
   }, []);
 
+  let page: ReactElement;
+  const detailMatch = DETAIL_PATH.exec(path);
   if (path === '/new-hires') {
-    return <NewHireListPage />;
+    page = <NewHireListPage />;
+  } else if (path === '/new-hires/new') {
+    page = <NewHireFormPage />;
+  } else if (detailMatch) {
+    page = <NewHireDetailPage key={detailMatch[1]} id={Number(detailMatch[1])} role={role} />;
+  } else {
+    page = <HomePage />;
   }
-  if (path === '/new-hires/new') {
-    return <NewHireFormPage />;
-  }
-  return <HomePage />;
+
+  return (
+    <>
+      <header className="app-header">
+        <RoleSwitcher role={role} onChange={changeRole} />
+      </header>
+      {page}
+    </>
+  );
 }

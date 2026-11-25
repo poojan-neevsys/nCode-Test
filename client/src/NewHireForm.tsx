@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, navigateTo } from './navigation';
 import { RequisitionPicker, type RequisitionOption } from './RequisitionPicker';
+import { portalHeaders } from './role';
 
 // Must match the field names the server returns in its 400 responses.
 const FIELD_ORDER = [
@@ -33,7 +34,7 @@ function isFieldName(value: string): value is FieldName {
   return (FIELD_ORDER as readonly string[]).includes(value);
 }
 // Reads { "errors": { "<field>": "<message>" } } and ignores anything else.
-function readErrors(body: unknown): Record<string, string> {
+export function readErrors(body: unknown): Record<string, string> {
   if (typeof body !== 'object' || body === null) {
     return {};
   }
@@ -86,7 +87,7 @@ export function NewHireFormPage() {
     try {
       response = await fetch('/api/new-hires', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...portalHeaders() },
         body: JSON.stringify({ ...values, requisitionId: requisition ? requisition.id : null }),
       });
     } catch {

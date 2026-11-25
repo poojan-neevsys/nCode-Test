@@ -4,10 +4,14 @@ import type { DatabaseSync } from 'node:sqlite';
 import { checkDatabase } from './db.js';
 import { createNewHiresRouter } from './new-hires.js';
 import { createRequisitionsRouter } from './requisitions.js';
+import { attachRole } from './roles.js';
 
 export function createApp(db: DatabaseSync, clientDistDir: string): Express {
   const app = express();
   app.disable('x-powered-by');
+
+  // AB#comp-roles, criterion 2: every request gets an acting role from X-Portal-Role.
+  app.use(attachRole);
 
   // AB#foundation, criterion 2: 200 when the database answers, 503 when it does not.
   app.get('/api/health', (_req, res) => {

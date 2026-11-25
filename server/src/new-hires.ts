@@ -1,6 +1,13 @@
 import express, { type ErrorRequestHandler, Router } from 'express';
 import type { DatabaseSync } from 'node:sqlite';
+import {
+  readCompensation,
+  saveCompensation,
+  validateCompensation,
+  type CompensationRecord,
+} from './compensation.js';
 import { findLinkableRequisition } from './requisitions.js';
+import { requireHrManager, roleOf } from './roles.js';
 
 // AB#new-hire-draft: the departments a new hire can be assigned to.
 export const DEPARTMENTS = ['Engineering', 'Finance', 'HR', 'Operations', 'Sales'] as const;
@@ -158,6 +165,26 @@ function toRecord(row: Row): NewHireRecord {
   };
 }
 
+// AB#comp-view, criterion 3: the detail view adds the requisition number and, for hr_manager only, compensation.
+export interface NewHireDetail extends NewHireRecord {
+  requisitionNumber: string | null;
+  compensation?: CompensationRecord | null;
+}
+
+// Ids come from the URL. Anything that is not a positive whole number is treated as unknown.
+function parseId(raw: string): number | null {
+  if (!/^\d+$/.test(raw)) {
+    return null;
+  }
+  const id = Number(raw);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+// Express types the route parameter as string | string[]; only a single string can be an id.
+function idParam(raw: string | string[] | undefined): number | null {
+  return typeof raw === 'string' ? parseId(raw) : null;
+}
+
 // Malformed JSON bodies get a 400 in the same shape as validation errors.
 const onBodyError: ErrorRequestHandler = (err, _req, res, next) => {
   if (typeof err === 'object' && err !== null && (err as { type?: unknown }).type === 'entity.parse.failed') {
@@ -239,6 +266,62 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
       throw new Error('Saved new hire could not be read back.');
     }
     res.status(201).json(toRecord(row));
+  });
+
+  // AB#comp-view, criteria 1, 2 and 3: full record with requisition number; unknown id gives 404.
+  router.get('/:id', (req, res) => {
+    const id = idParam(req.params.id);
+    const row =
+      id === null
+        ? undefined
+        : db
+            .prepare(
+              `SELECT n.id, n.first_name, n.last_name, n.personal_email, n.job_title, n.department,
+                      n.start_date, n.status, n.requisition_id, n.created_at, n.updated_at,
+                      r.number AS requisition_number
+               FROM new_hires n
+               LEFT JOIN requisitions r ON r.id = n.requisition_id
+               WHERE n.id = ?`,
+            )
+            .get(id);
+    if (!row) {
+      res.status(404).json({ error: 'New hire not found.' });
+      return;
+    }
+
+    const record: NewHireDetail = {
+      ...toRecord(row),
+      requisitionNumber: row.requisition_number === null ? null : String(row.requisition_number),
+    };
+    // AB#comp-view, criterion 3: the compensation field is added for hr_manager only, so it is absent otherwise.
+    if (roleOf(res) === 'hr_manager') {
+      record.compensation = readCompensation(db, Number(row.id));
+    }
+    res.json(record);
+  });
+
+  // AB#comp-set, criteria 4, 5 and 6: hr_manager creates or replaces compensation; other roles get 403.
+  // The role check runs before the body is read, so nothing is parsed or saved for other roles.
+  router.put('/:id/compensation', requireHrManager, express.json(), (req, res) => {
+    const id = idParam(req.params.id);
+    if (id === null || !db.prepare('SELECT id FROM new_hires WHERE id = ?').get(id)) {
+      res.status(404).json({ error: 'New hire not found.' });
+      return;
+    }
+
+    // AB#comp-validation, criterion 4: nothing is saved when any field is invalid.
+    const result = validateCompensation(req.body);
+    if ('errors' in result) {
+      res.status(400).json({ errors: result.errors });
+      return;
+    }
+
+    saveCompensation(db, id, result.input);
+    const saved = readCompensation(db, id);
+    if (!saved) {
+      throw new Error('Saved compensation could not be read back.');
+    }
+    res.status(200).json(saved);
   });
 
   router.use(onBodyError);

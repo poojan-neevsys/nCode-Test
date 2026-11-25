@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from './navigation';
+import { portalHeaders } from './role';
 
 interface NewHire {
   id: number;
@@ -34,7 +35,7 @@ function isNewHire(value: unknown): value is NewHire {
 
 async function loadNewHires(signal: AbortSignal): Promise<ListState> {
   try {
-    const response = await fetch('/api/new-hires', { signal });
+    const response = await fetch('/api/new-hires', { signal, headers: portalHeaders() });
     if (!response.ok) {
       return { kind: 'failed' };
     }
@@ -49,7 +50,7 @@ async function loadNewHires(signal: AbortSignal): Promise<ListState> {
 }
 
 // Statuses are stored in lower case; show them with a capital first letter.
-function statusLabel(status: string): string {
+export function statusLabel(status: string): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
@@ -90,7 +91,10 @@ export function NewHireListPage() {
           <tbody>
             {state.items.map((item) => (
               <tr key={item.id}>
-                <td>{item.fullName}</td>
+                <td>
+                  {/* AB#comp-view, criterion 6: selecting a row opens its detail page. */}
+                  <Link to={`/new-hires/${item.id}`}>{item.fullName}</Link>
+                </td>
                 <td>{item.jobTitle}</td>
                 <td>{item.department}</td>
                 <td>{item.requisitionNumber ?? '-'}</td>

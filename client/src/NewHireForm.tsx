@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link, navigateTo } from './navigation';
 import { RequisitionPicker, type RequisitionOption } from './RequisitionPicker';
 import { portalHeaders } from './role';
@@ -51,13 +51,21 @@ export function readErrors(body: unknown): Record<string, string> {
   return result;
 }
 
+// AB#new-hire-edit, criterion 1: the form edits an existing draft or returned new hire when this is given.
+export interface EditingNewHire {
+  id: number;
+  status: string;
+  values: Values;
+  requisition: RequisitionOption | null;
+}
+
 // AB#new-hire-draft, criterion 6: labels, errors tied to fields, and focus on the first error.
-export function NewHireFormPage() {
-  const [values, setValues] = useState<Values>(EMPTY_VALUES);
+export function NewHireFormPage({ editing }: { editing?: EditingNewHire }) {
+  const [values, setValues] = useState<Values>(editing ? editing.values : EMPTY_VALUES);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [requisition, setRequisition] = useState<RequisitionOption | null>(null);
+  const [requisition, setRequisition] = useState<RequisitionOption | null>(editing ? editing.requisition : null);
   // AB#requisition-link, criterion 6: while a requisition is selected, job title and department are locked.
   const locked = requisition !== null;
 
@@ -85,10 +93,16 @@ export function NewHireFormPage() {
 
     let response: Response;
     try {
-      response = await fetch('/api/new-hires', {
-        method: 'POST',
+      // AB#new-hire-edit, criterion 2: an edit sends the status the form was opened with.
+      const payload = {
+        ...values,
+        requisitionId: requisition ? requisition.id : null,
+        ...(editing ? { expectedStatus: editing.status } : {}),
+      };
+      response = await fetch(editing ? `/api/new-hires/${editing.id}` : '/api/new-hires', {
+        method: editing ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json', ...portalHeaders() },
-        body: JSON.stringify({ ...values, requisitionId: requisition ? requisition.id : null }),
+        body: JSON.stringify(payload),
       });
     } catch {
       setFormError('Could not reach the server. Your entries are kept; try again.');
@@ -96,8 +110,8 @@ export function NewHireFormPage() {
       return;
     }
 
-    if (response.status === 201) {
-      navigateTo('/new-hires');
+    if (response.status === (editing ? 200 : 201)) {
+      navigateTo(editing ? `/new-hires/${editing.id}` : '/new-hires');
       return;
     }
 
@@ -125,6 +139,9 @@ export function NewHireFormPage() {
       if (firstInvalid !== undefined) {
         document.getElementById(`field-${firstInvalid}`)?.focus();
       }
+    } else if (response.status === 409) {
+      // AB#new-hire-edit, criterion 3: the record changed or can no longer be edited.
+      setFormError('This new hire has changed or can no longer be edited. Reload the page to see its current status.');
     } else {
       setFormError('Could not save the new hire. Your entries are kept; try again.');
     }
@@ -146,7 +163,7 @@ export function NewHireFormPage() {
 
   return (
     <main>
-      <h1>Add new hire</h1>
+      <h1>{editing ? 'Edit new hire' : 'Add new hire'}</h1>
       {formError && (
         <p role="alert" className="form-error">
           {formError}
@@ -250,12 +267,164 @@ export function NewHireFormPage() {
         </p>
         <p>
           <button type="submit" disabled={saving}>
-            Save new hire
+            {editing ? 'Save changes' : 'Save new hire'}
           </button>{' '}
-          <Link to="/new-hires">Cancel</Link>
+          <Link to={editing ? `/new-hires/${editing.id}` : '/new-hires'}>Cancel</Link>
         </p>
         {saving && <p role="status">Saving...</p>}
       </form>
     </main>
+  );
+}
+
+// The fields of a new hire that the edit page reads from the detail API.
+interface EditSource {
+  id: number;
+  firstName: string;
+  lastName: string;
+  personalEmail: string;
+  jobTitle: string;
+  department: string;
+  startDate: string;
+  status: string;
+  requisitionId: number | null;
+  requisitionNumber: string | null;
+  requisitionHiringManager: string | null;
+}
+
+type EditLoadState =
+  | { kind: 'loading' }
+  | { kind: 'failed' }
+  | { kind: 'notFound' }
+  | { kind: 'ready'; source: EditSource };
+
+// AB#new-hire-edit, criterion 2 and 10: only draft and returned records can be edited.
+const EDITABLE_STATUSES = ['draft', 'returned'];
+
+function isEditSource(value: unknown): value is EditSource {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === 'number' &&
+    typeof candidate.firstName === 'string' &&
+    typeof candidate.lastName === 'string' &&
+    typeof candidate.personalEmail === 'string' &&
+    typeof candidate.jobTitle === 'string' &&
+    typeof candidate.department === 'string' &&
+    typeof candidate.startDate === 'string' &&
+    typeof candidate.status === 'string' &&
+    (candidate.requisitionId === null || typeof candidate.requisitionId === 'number') &&
+    (candidate.requisitionNumber === null || typeof candidate.requisitionNumber === 'string') &&
+    (candidate.requisitionHiringManager === null || typeof candidate.requisitionHiringManager === 'string')
+  );
+}
+
+async function loadForEdit(id: number, signal: AbortSignal): Promise<EditLoadState> {
+  try {
+    const response = await fetch(`/api/new-hires/${id}`, { signal, headers: portalHeaders() });
+    if (response.status === 404) {
+      return { kind: 'notFound' };
+    }
+    if (!response.ok) {
+      return { kind: 'failed' };
+    }
+    const body: unknown = await response.json();
+    if (isEditSource(body)) {
+      return { kind: 'ready', source: body };
+    }
+  } catch {
+    // Aborted or unreachable: fall through to the failed state below.
+  }
+  return { kind: 'failed' };
+}
+
+// AB#new-hire-edit, criteria 1 and 2: /new-hires/<id>/edit loads the record and shows the form filled in.
+export function NewHireEditPage({ id }: { id: number }) {
+  const [state, setState] = useState<EditLoadState>({ kind: 'loading' });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setState({ kind: 'loading' });
+    loadForEdit(id, controller.signal).then((result) => {
+      if (!controller.signal.aborted) {
+        setState(result);
+      }
+    });
+    return () => controller.abort();
+  }, [id]);
+
+  if (state.kind === 'loading') {
+    return (
+      <main>
+        <h1>Edit new hire</h1>
+        <p role="status">Loading new hire...</p>
+      </main>
+    );
+  }
+  if (state.kind === 'failed') {
+    return (
+      <main>
+        <h1>Edit new hire</h1>
+        <p role="alert">Could not load this new hire. Try again later.</p>
+        <p>
+          <Link to="/new-hires">Back to new hires</Link>
+        </p>
+      </main>
+    );
+  }
+  if (state.kind === 'notFound') {
+    return (
+      <main>
+        <h1>Edit new hire</h1>
+        <p role="alert">New hire not found.</p>
+        <p>
+          <Link to="/new-hires">Back to new hires</Link>
+        </p>
+      </main>
+    );
+  }
+
+  const { source } = state;
+  if (!EDITABLE_STATUSES.includes(source.status)) {
+    return (
+      <main>
+        <h1>Edit new hire</h1>
+        <p role="alert">Only draft or returned new hires can be edited.</p>
+        <p>
+          <Link to={`/new-hires/${id}`}>Back to the new hire</Link>
+        </p>
+      </main>
+    );
+  }
+
+  const requisition: RequisitionOption | null =
+    source.requisitionId === null || source.requisitionNumber === null
+      ? null
+      : {
+          id: source.requisitionId,
+          number: source.requisitionNumber,
+          jobTitle: source.jobTitle,
+          department: source.department,
+          hiringManagerName: source.requisitionHiringManager ?? '',
+        };
+
+  return (
+    <NewHireFormPage
+      editing={{
+        id,
+        status: source.status,
+        values: {
+          firstName: source.firstName,
+          lastName: source.lastName,
+          personalEmail: source.personalEmail,
+          jobTitle: source.jobTitle,
+          department: source.department,
+          startDate: source.startDate,
+        },
+        requisition,
+      }}
+    />
   );
 }

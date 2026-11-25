@@ -22,6 +22,20 @@ export function checkDatabase(db: DatabaseSync): boolean {
   }
 }
 
+// AB#audit-log, criterion 3: runs the work in one IMMEDIATE transaction. It is committed when the work
+// returns and rolled back when it throws.
+export function inTransaction<T>(db: DatabaseSync, work: () => T): T {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = work();
+    db.exec('COMMIT');
+    return result;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 // AB#foundation, criterion 3: apply pending *.sql files in name order, record
 // each one in schema_migrations, and apply nothing on later runs.
 // Returns the names of the migrations applied in this run.

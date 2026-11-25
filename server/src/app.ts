@@ -1,6 +1,7 @@
 import express, { type ErrorRequestHandler, type Express } from 'express';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { createAuditRouter } from './audit.js';
 import { checkDatabase } from './db.js';
 import { createNewHiresRouter } from './new-hires.js';
 import { createRequisitionsRouter } from './requisitions.js';
@@ -31,6 +32,9 @@ export function createApp(db: DatabaseSync, clientDistDir: string): Express {
 
   // AB#letter-templates, criteria 2 to 7: welcome letter templates and their preview.
   app.use('/api/templates', createTemplatesRouter(db));
+
+  // AB#audit-log, criterion 9: the audit log for hr_manager. It has no write routes.
+  app.use('/api/audit', createAuditRouter(db));
 
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Not found' });

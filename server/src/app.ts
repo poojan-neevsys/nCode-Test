@@ -5,6 +5,7 @@ import { checkDatabase } from './db.js';
 import { createNewHiresRouter } from './new-hires.js';
 import { createRequisitionsRouter } from './requisitions.js';
 import { attachRole } from './roles.js';
+import { createTemplatesRouter } from './templates.js';
 
 export function createApp(db: DatabaseSync, clientDistDir: string): Express {
   const app = express();
@@ -27,6 +28,9 @@ export function createApp(db: DatabaseSync, clientDistDir: string): Express {
 
   // AB#requisition-link, criterion 2: open requisition search for the create form.
   app.use('/api/requisitions', createRequisitionsRouter(db));
+
+  // AB#letter-templates, criteria 2 to 7: welcome letter templates and their preview.
+  app.use('/api/templates', createTemplatesRouter(db));
 
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Not found' });

@@ -181,12 +181,12 @@ function parseId(raw: string): number | null {
 }
 
 // Express types the route parameter as string | string[]; only a single string can be an id.
-function idParam(raw: string | string[] | undefined): number | null {
+export function idParam(raw: string | string[] | undefined): number | null {
   return typeof raw === 'string' ? parseId(raw) : null;
 }
 
 // Malformed JSON bodies get a 400 in the same shape as validation errors.
-const onBodyError: ErrorRequestHandler = (err, _req, res, next) => {
+export const onBodyError: ErrorRequestHandler = (err, _req, res, next) => {
   if (typeof err === 'object' && err !== null && (err as { type?: unknown }).type === 'entity.parse.failed') {
     res.status(400).json({ errors: { body: 'Request body must be valid JSON.' } });
     return;

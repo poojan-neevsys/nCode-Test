@@ -1,0 +1,5 @@
+-- 0001_foundation.sql
+-- Baseline migration for the HR Onboarding Portal. It creates no application
+-- tables yet; the EP-01 stories add their tables in later numbered migrations.
+-- The schema_migrations table that records applied files is created by the
+-- migration runner (server/src/db.ts) before any file is applied.

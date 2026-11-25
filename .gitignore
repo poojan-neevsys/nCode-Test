@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+client/dist/
+*.tsbuildinfo
+
+# Local database and logs
+data/
+*.db
+*.db-journal
+*.log
+
+# Environment files (keep the example file committed)
+.env
+.env.*
+!.env.example

@@ -1,0 +1,20 @@
+{
+  "name": "neevsys-hr-onboarding-portal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NeevSys HR Onboarding Portal (npm workspaces monorepo: client and server)",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "build": "npm run build -w server && npm run build -w client",
+    "start": "npm run start -w server",
+    "dev:compile": "npm run build:watch -w server",
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client"
+  }
+}

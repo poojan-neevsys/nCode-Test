@@ -15,10 +15,13 @@ export function navigateTo(path: string): void {
 interface LinkProps {
   to: string;
   children: ReactNode;
+  className?: string;
+  // Visual design story, criterion 2: marks the navigation item of the page being shown.
+  current?: boolean;
 }
 
 // A real <a href> so keyboard, middle-click and screen readers behave as links do.
-export function Link({ to, children }: LinkProps) {
+export function Link({ to, children, className, current }: LinkProps) {
   function handleClick(event: MouseEvent<HTMLAnchorElement>) {
     if (
       event.defaultPrevented ||
@@ -35,7 +38,7 @@ export function Link({ to, children }: LinkProps) {
   }
 
   return (
-    <a href={to} onClick={handleClick}>
+    <a href={to} onClick={handleClick} className={className} aria-current={current ? 'page' : undefined}>
       {children}
     </a>
   );

@@ -5,6 +5,7 @@ import { NewHireListPage } from './NewHireList';
 import { currentPath, Link } from './navigation';
 import { getPortalRole, portalHeaders, setPortalRole, type PortalRole } from './role';
 import { RoleSwitcher } from './RoleSwitcher';
+import { TemplatesPage } from './Templates';
 
 interface Health {
   status: string;
@@ -58,6 +59,9 @@ function HomePage() {
       <p>
         <Link to="/new-hires">New hires</Link>
       </p>
+      <p>
+        <Link to="/templates">Letter templates</Link>
+      </p>
     </main>
   );
 }
@@ -92,6 +96,9 @@ export function App() {
     page = <NewHireListPage />;
   } else if (path === '/new-hires/new') {
     page = <NewHireFormPage />;
+  } else if (path === '/templates') {
+    // AB#letter-templates, criterion 8: the templates page; the role decides who may edit.
+    page = <TemplatesPage role={role} />;
   } else if (detailMatch) {
     page = <NewHireDetailPage key={detailMatch[1]} id={Number(detailMatch[1])} role={role} />;
   } else {

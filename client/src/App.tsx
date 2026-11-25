@@ -68,6 +68,8 @@ function HomePage() {
 
 // AB#new-hire-draft: the detail page path, /new-hires/<id>.
 const DETAIL_PATH = /^\/new-hires\/(\d+)$/;
+// AB#edit-new-hire, criterion 5: the edit page path, /new-hires/<id>/edit.
+const EDIT_PATH = /^\/new-hires\/(\d+)\/edit$/;
 
 export function App() {
   // AB#new-hire-draft: a small path switch; the pages are few, so no router package is needed.
@@ -92,6 +94,7 @@ export function App() {
 
   let page: ReactElement;
   const detailMatch = DETAIL_PATH.exec(path);
+  const editMatch = EDIT_PATH.exec(path);
   if (path === '/new-hires') {
     page = <NewHireListPage />;
   } else if (path === '/new-hires/new') {
@@ -99,6 +102,8 @@ export function App() {
   } else if (path === '/templates') {
     // AB#letter-templates, criterion 8: the templates page; the role decides who may edit.
     page = <TemplatesPage role={role} />;
+  } else if (editMatch) {
+    page = <NewHireFormPage key={editMatch[1]} editId={Number(editMatch[1])} />;
   } else if (detailMatch) {
     page = <NewHireDetailPage key={detailMatch[1]} id={Number(detailMatch[1])} role={role} />;
   } else {

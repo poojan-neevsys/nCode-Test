@@ -1,11 +1,13 @@
 import express, { type ErrorRequestHandler, Router } from 'express';
 import type { DatabaseSync } from 'node:sqlite';
+import { writeAudit } from './audit.js';
 import {
   readCompensation,
   saveCompensation,
   validateCompensation,
   type CompensationRecord,
 } from './compensation.js';
+import { inTransaction } from './db.js';
 import { findLinkableRequisition } from './requisitions.js';
 import { type PortalRole, requireHrManager, roleOf } from './roles.js';
 
@@ -137,6 +139,8 @@ export interface NewHireRecord {
   department: string;
   startDate: string;
   status: string;
+  // AB#hold-release, criterion 2: the reason of the current hold, null when the new hire is not on hold.
+  holdReason: string | null;
   requisitionId: number | null;
   createdAt: string;
   updatedAt: string;
@@ -144,7 +148,7 @@ export interface NewHireRecord {
 
 const SELECT_RECORD = `
   SELECT id, first_name, last_name, personal_email, job_title, department,
-         start_date, status, requisition_id, created_at, updated_at
+         start_date, status, hold_reason, requisition_id, created_at, updated_at
   FROM new_hires`;
 
 type Row = Record<string, unknown>;
@@ -159,6 +163,7 @@ function toRecord(row: Row): NewHireRecord {
     department: String(row.department),
     startDate: String(row.start_date),
     status: String(row.status),
+    holdReason: row.hold_reason === null ? null : String(row.hold_reason),
     requisitionId: row.requisition_id === null ? null : Number(row.requisition_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -168,6 +173,8 @@ function toRecord(row: Row): NewHireRecord {
 // AB#comp-view, criterion 3: the detail view adds the requisition number and, for hr_manager only, compensation.
 export interface NewHireDetail extends NewHireRecord {
   requisitionNumber: string | null;
+  // AB#hold-release: the hiring manager of the linked requisition, so the edit form can show it.
+  requisitionHiringManagerName: string | null;
   compensation?: CompensationRecord | null;
 }
 
@@ -194,28 +201,46 @@ export const onBodyError: ErrorRequestHandler = (err, _req, res, next) => {
   next(err);
 };
 
-// AB#status-workflow, criterion 1: the statuses a new hire can have.
-export const STATUSES = ['draft', 'in_review', 'returned', 'approved'] as const;
+// AB#status-workflow, criterion 1 and AB#hold-release, criterion 1: the statuses a new hire can have. released is final.
+export const STATUSES = ['draft', 'in_review', 'returned', 'approved', 'on_hold', 'released'] as const;
 export type Status = (typeof STATUSES)[number];
 
-// AB#status-workflow: the actions, who may perform each one, and the statuses it moves from and to.
-export const ACTIONS = ['submit', 'approve', 'return'] as const;
+function isStatus(value: unknown): value is Status {
+  return typeof value === 'string' && (STATUSES as readonly string[]).includes(value);
+}
+
+// AB#hold-release, criterion 1: the actions, who may perform each one, and the statuses it moves from and to.
+export const ACTIONS = ['submit', 'approve', 'return', 'hold', 'resume', 'release'] as const;
 export type Action = (typeof ACTIONS)[number];
 
 interface ActionRule {
   roles: readonly PortalRole[];
   from: readonly Status[];
-  to: Status;
+  // null means the status the new hire had before the hold (resume).
+  to: Status | null;
 }
 
 const ACTION_RULES: Record<Action, ActionRule> = {
   submit: { roles: ['hr_coordinator', 'hr_manager'], from: ['draft', 'returned'], to: 'in_review' },
   approve: { roles: ['hr_manager'], from: ['in_review'], to: 'approved' },
   return: { roles: ['hr_manager'], from: ['in_review'], to: 'returned' },
+  // AB#hold-release, criterion 3: hold from in_review or approved, with a reason.
+  hold: { roles: ['hr_manager'], from: ['in_review', 'approved'], to: 'on_hold' },
+  // AB#hold-release, criterion 5: resume returns to the status the hold started from.
+  resume: { roles: ['hr_manager'], from: ['on_hold'], to: null },
+  // AB#hold-release, criterion 7: release is final and only from approved.
+  release: { roles: ['hr_manager'], from: ['approved'], to: 'released' },
 };
 
 // AB#status-workflow, criterion 6: a return comment is required and limited to 500 characters.
+// AB#hold-release, criterion 3: a hold reason has the same limit.
 const COMMENT_MAX_LENGTH = 500;
+
+// AB#status-workflow, criterion 1: only these actions write a status history row (its table allows only these).
+const HISTORY_ACTIONS: readonly Action[] = ['submit', 'approve', 'return'];
+
+// AB#edit-new-hire, criterion 2: only draft and returned records can be edited.
+const EDITABLE_STATUSES: readonly string[] = ['draft', 'returned'];
 
 function isAction(value: unknown): value is Action {
   return typeof value === 'string' && (ACTIONS as readonly string[]).includes(value);
@@ -237,47 +262,57 @@ function objectOf(body: unknown): Record<string, unknown> {
 interface ActionRequest {
   action: Action;
   expectedStatus: string;
+  // The return comment, or the hold reason for hold. Null for the other actions.
   comment: string | null;
 }
+
+type ActionErrorField = 'expectedStatus' | 'comment' | 'reason';
 
 // Checks the action body and reports every invalid field. Nothing is changed on failure.
 function validateActionRequest(
   source: Record<string, unknown>,
   action: Action,
-): { request: ActionRequest } | { errors: Partial<Record<'expectedStatus' | 'comment', string>> } {
-  const errors: Partial<Record<'expectedStatus' | 'comment', string>> = {};
+): { request: ActionRequest } | { errors: Partial<Record<ActionErrorField, string>> } {
+  const errors: Partial<Record<ActionErrorField, string>> = {};
 
   const expectedStatus = source.expectedStatus;
   if (typeof expectedStatus !== 'string' || expectedStatus.trim() === '') {
     errors.expectedStatus = 'Send the status the new hire currently has.';
   }
 
-  let comment: string | null = null;
-  const rawComment = source.comment;
-  if (rawComment !== undefined && rawComment !== null) {
-    if (typeof rawComment !== 'string') {
-      errors.comment = 'Enter the comment as text.';
-    } else {
-      // AB#status-workflow, criterion 6: the length is checked on the raw comment, before trimming.
-      if (Array.from(rawComment).length > COMMENT_MAX_LENGTH) {
-        errors.comment = `Comment must be ${COMMENT_MAX_LENGTH} characters or fewer.`;
-      } else if (rawComment.trim() !== '') {
-        comment = rawComment.trim();
-      }
+  // AB#hold-release, criterion 3: a hold takes its reason from "reason"; the other actions use "comment".
+  const textField: 'comment' | 'reason' = action === 'hold' ? 'reason' : 'comment';
+  const label = action === 'hold' ? 'Reason' : 'Comment';
+  let text: string | null = null;
+  const rawText = source[textField];
+  if (rawText !== undefined && rawText !== null) {
+    if (typeof rawText !== 'string') {
+      errors[textField] = `Enter the ${label.toLowerCase()} as text.`;
+    } else if (Array.from(rawText).length > COMMENT_MAX_LENGTH) {
+      // AB#status-workflow, criterion 6: the length is checked on the raw text, before trimming.
+      errors[textField] = `${label} must be ${COMMENT_MAX_LENGTH} characters or fewer.`;
+    } else if (rawText.trim() !== '') {
+      text = rawText.trim();
     }
   }
-  // AB#status-workflow, criterion 6: returning a new hire needs a comment.
-  if (action === 'return' && comment === null && errors.comment === undefined) {
-    errors.comment = 'Enter a comment explaining what needs to change.';
+  if (text === null && errors[textField] === undefined) {
+    // AB#status-workflow, criterion 6: returning a new hire needs a comment.
+    if (action === 'return') {
+      errors.comment = 'Enter a comment explaining what needs to change.';
+    }
+    // AB#hold-release, criterion 3: a hold needs a reason.
+    if (action === 'hold') {
+      errors.reason = 'Enter a reason for putting the new hire on hold.';
+    }
   }
 
   if (Object.keys(errors).length > 0) {
     return { errors };
   }
-  return { request: { action, expectedStatus: expectedStatus as string, comment } };
+  return { request: { action, expectedStatus: expectedStatus as string, comment: text } };
 }
 
-// AB#status-workflow, criteria 5 and 6: conditions that block an action. Every failing reason is returned.
+// AB#status-workflow, criteria 5 and 6 and AB#hold-release, criterion 7: conditions that block an action. Every failing reason is returned.
 function actionBlockers(db: DatabaseSync, id: number, action: Action): string[] {
   const reasons: string[] = [];
   if (action === 'submit') {
@@ -295,42 +330,112 @@ function actionBlockers(db: DatabaseSync, id: number, action: Action): string[] 
   if (action === 'approve' && readCompensation(db, id) === null) {
     reasons.push('Compensation is required before approval.');
   }
+  if (action === 'release') {
+    const row = db.prepare('SELECT start_date FROM new_hires WHERE id = ?').get(id);
+    if (!row) {
+      return ['The new hire could not be found.'];
+    }
+    // AB#hold-release, criterion 7: a release with a start date already past is refused and nothing changes.
+    if (String(row.start_date) < todayIsoDate()) {
+      reasons.push('The start date is before today, so the new hire cannot be released.');
+    }
+  }
   return reasons;
 }
 
-// AB#status-workflow, criterion 2: the status change and its history entry are written in one transaction.
-// Returns false when the status was no longer the expected one, so nothing is written.
-function recordTransition(
-  db: DatabaseSync,
-  id: number,
-  from: Status,
-  request: ActionRequest,
-  role: PortalRole,
-): boolean {
-  const to = ACTION_RULES[request.action].to;
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const updated = db
+// AB#hold-release, criterion 5: the status an action moves the new hire to.
+function targetStatus(db: DatabaseSync, id: number, action: Action): Status {
+  const rule = ACTION_RULES[action].to;
+  if (rule !== null) {
+    return rule;
+  }
+  const row = db.prepare('SELECT status_before_hold FROM new_hires WHERE id = ?').get(id);
+  const previous = row ? row.status_before_hold : null;
+  if (!isStatus(previous)) {
+    throw new Error('The status before the hold is missing.');
+  }
+  return previous;
+}
+
+// AB#audit-log, criterion 3: a plain-text summary of the status change. Compensation is never included.
+function describeTransition(action: Action, from: Status, to: Status, text: string | null): string {
+  const change = `Status changed from ${from} to ${to}.`;
+  if (text === null) {
+    return change;
+  }
+  return `${change} ${action === 'hold' ? 'Reason' : 'Comment'}: ${text}`;
+}
+
+// Updates the status only when it is still the expected one. Returns the number of rows changed.
+function updateStatus(db: DatabaseSync, id: number, from: Status, to: Status, request: ActionRequest): number {
+  if (request.action === 'hold') {
+    // AB#hold-release, criterion 2: the reason is kept and the status to return to is remembered.
+    return Number(
+      db
+        .prepare(
+          `UPDATE new_hires
+           SET status = ?, hold_reason = ?, status_before_hold = ?,
+               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+           WHERE id = ? AND status = ?`,
+        )
+        .run(to, request.comment, from, id, from).changes,
+    );
+  }
+  if (request.action === 'resume') {
+    // AB#hold-release, criterion 5: the hold details are cleared once the hold ends.
+    return Number(
+      db
+        .prepare(
+          `UPDATE new_hires
+           SET status = ?, hold_reason = NULL, status_before_hold = NULL,
+               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+           WHERE id = ? AND status = ?`,
+        )
+        .run(to, id, from).changes,
+    );
+  }
+  return Number(
+    db
       .prepare(
         `UPDATE new_hires
          SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE id = ? AND status = ?`,
       )
-      .run(to, id, from);
-    if (Number(updated.changes) !== 1) {
-      db.exec('ROLLBACK');
+      .run(to, id, from).changes,
+  );
+}
+
+// AB#status-workflow, criterion 2, AB#hold-release and AB#audit-log, criterion 2: the status change,
+// its history row (for the three original actions) and its audit entry are written in one transaction.
+// Returns false when the status was no longer the expected one, so nothing is written.
+function recordTransition(
+  db: DatabaseSync,
+  id: number,
+  from: Status,
+  to: Status,
+  request: ActionRequest,
+  role: PortalRole,
+): boolean {
+  const { action, comment } = request;
+  return inTransaction(db, () => {
+    if (updateStatus(db, id, from, to, request) !== 1) {
       return false;
     }
-    db.prepare(
-      `INSERT INTO new_hire_status_history (new_hire_id, from_status, to_status, action, role, comment)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(id, from, to, request.action, role, request.comment);
-    db.exec('COMMIT');
+    if ((HISTORY_ACTIONS as readonly string[]).includes(action)) {
+      db.prepare(
+        `INSERT INTO new_hire_status_history (new_hire_id, from_status, to_status, action, role, comment)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(id, from, to, action, role, comment);
+    }
+    writeAudit(db, {
+      entityType: 'new_hire',
+      entityId: id,
+      action,
+      role,
+      details: describeTransition(action, from, to, comment),
+    });
     return true;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+  });
 }
 
 // AB#status-workflow, criterion 7: history rows for one new hire, oldest first.
@@ -366,8 +471,8 @@ function readDetail(db: DatabaseSync, id: number, role: PortalRole): NewHireDeta
   const row = db
     .prepare(
       `SELECT n.id, n.first_name, n.last_name, n.personal_email, n.job_title, n.department,
-              n.start_date, n.status, n.requisition_id, n.created_at, n.updated_at,
-              r.number AS requisition_number
+              n.start_date, n.status, n.hold_reason, n.requisition_id, n.created_at, n.updated_at,
+              r.number AS requisition_number, r.hiring_manager_name AS requisition_hiring_manager_name
        FROM new_hires n
        LEFT JOIN requisitions r ON r.id = n.requisition_id
        WHERE n.id = ?`,
@@ -380,12 +485,56 @@ function readDetail(db: DatabaseSync, id: number, role: PortalRole): NewHireDeta
   const record: NewHireDetail = {
     ...toRecord(row),
     requisitionNumber: row.requisition_number === null ? null : String(row.requisition_number),
+    requisitionHiringManagerName:
+      row.requisition_hiring_manager_name === null ? null : String(row.requisition_hiring_manager_name),
   };
   // AB#comp-view, criterion 3: the compensation field is added for hr_manager only, so it is absent otherwise.
   if (role === 'hr_manager') {
     record.compensation = readCompensation(db, id);
   }
   return record;
+}
+
+// AB#requisition-link, criteria 3 and 4: a linked requisition supplies the job title and department.
+// Returns the error to show when the requisition cannot be linked.
+function resolveRequisitionFields(
+  db: DatabaseSync,
+  input: NewHireInput,
+  newHireId?: number,
+): { jobTitle: string; department: string } | { error: string } {
+  if (input.requisitionId === null) {
+    return { jobTitle: input.jobTitle, department: input.department };
+  }
+  const linkable = findLinkableRequisition(db, input.requisitionId, newHireId);
+  if ('error' in linkable) {
+    return { error: linkable.error };
+  }
+  return { jobTitle: linkable.requisition.jobTitle, department: linkable.requisition.department };
+}
+
+// AB#edit-new-hire, criterion 4: the fields an edit can change and that appear in the audit entry.
+const EDITED_FIELDS = [
+  'firstName',
+  'lastName',
+  'personalEmail',
+  'jobTitle',
+  'department',
+  'startDate',
+  'requisitionId',
+] as const;
+type EditedField = (typeof EDITED_FIELDS)[number];
+
+// AB#edit-new-hire, criterion 4: names of the changed fields with their old and new values. No compensation here.
+function describeEdit(
+  changed: readonly EditedField[],
+  previous: Record<EditedField, string>,
+  next: Record<EditedField, string>,
+): string {
+  if (changed.length === 0) {
+    return 'No fields changed.';
+  }
+  const pairs = changed.map((field) => `${field}: "${previous[field]}" changed to "${next[field]}"`);
+  return `Changed fields: ${changed.join(', ')}. ${pairs.join('; ')}.`;
 }
 
 export function createNewHiresRouter(db: DatabaseSync): Router {
@@ -425,37 +574,43 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
     }
 
     const { input } = result;
-    let jobTitle = input.jobTitle;
-    let department = input.department;
-    if (input.requisitionId !== null) {
-      // AB#requisition-link, criteria 3 and 4: the requisition must be open and not linked yet.
-      // Its job title and department replace whatever was sent.
-      const linkable = findLinkableRequisition(db, input.requisitionId);
-      if ('error' in linkable) {
-        res.status(400).json({ errors: { requisitionId: linkable.error } });
-        return;
-      }
-      jobTitle = linkable.requisition.jobTitle;
-      department = linkable.requisition.department;
+    // AB#requisition-link, criteria 3 and 4: the requisition must be open and not linked yet.
+    const fields = resolveRequisitionFields(db, input);
+    if ('error' in fields) {
+      res.status(400).json({ errors: { requisitionId: fields.error } });
+      return;
     }
 
-    const inserted = db
-      .prepare(
-        `INSERT INTO new_hires
-           (first_name, last_name, personal_email, job_title, department, start_date, requisition_id, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')`,
-      )
-      .run(
-        input.firstName,
-        input.lastName,
-        input.personalEmail,
-        jobTitle,
-        department,
-        input.startDate,
-        input.requisitionId,
-      );
+    // AB#audit-log, criterion 3: the new hire and its audit entry are saved together.
+    const role = roleOf(res);
+    const newId = inTransaction(db, () => {
+      const inserted = db
+        .prepare(
+          `INSERT INTO new_hires
+             (first_name, last_name, personal_email, job_title, department, start_date, requisition_id, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')`,
+        )
+        .run(
+          input.firstName,
+          input.lastName,
+          input.personalEmail,
+          fields.jobTitle,
+          fields.department,
+          input.startDate,
+          input.requisitionId,
+        );
+      const id = Number(inserted.lastInsertRowid);
+      writeAudit(db, {
+        entityType: 'new_hire',
+        entityId: id,
+        action: 'create',
+        role,
+        details: 'New hire created as a draft.',
+      });
+      return id;
+    });
 
-    const row = db.prepare(`${SELECT_RECORD} WHERE id = ?`).get(Number(inserted.lastInsertRowid));
+    const row = db.prepare(`${SELECT_RECORD} WHERE id = ?`).get(newId);
     if (!row) {
       throw new Error('Saved new hire could not be read back.');
     }
@@ -471,6 +626,113 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
       return;
     }
     res.json(record);
+  });
+
+  // AB#edit-new-hire, criteria 1 to 4: a draft or returned new hire can be corrected with the same rules as create.
+  // Order of checks: unknown id (404), body (400), status or expectedStatus (409), requisition (400).
+  router.put('/:id', express.json(), (req, res) => {
+    const id = idParam(req.params.id);
+    const before = id === null ? null : readDetail(db, id, 'hr_coordinator');
+    if (id === null || before === null) {
+      res.status(404).json({ error: 'New hire not found.' });
+      return;
+    }
+
+    const source = objectOf(req.body);
+    const result = validateNewHire(req.body);
+    const expectedStatus = typeof source.expectedStatus === 'string' ? source.expectedStatus.trim() : '';
+    const errors: NewHireErrors & Partial<Record<'expectedStatus', string>> =
+      'errors' in result ? { ...result.errors } : {};
+    if (expectedStatus === '') {
+      errors.expectedStatus = 'Send the status the new hire currently has.';
+    }
+    const input = 'input' in result ? result.input : null;
+    if (input === null || Object.keys(errors).length > 0) {
+      res.status(400).json({ errors });
+      return;
+    }
+
+    const role = roleOf(res);
+    // AB#edit-new-hire, criterion 3: any other status, or a stale expectedStatus, gets 409 and nothing changes.
+    if (!(EDITABLE_STATUSES as readonly string[]).includes(before.status) || expectedStatus !== before.status) {
+      res.status(409).json({
+        error: 'The new hire can only be edited while it is a draft or returned. Reload to see its current status.',
+        currentStatus: before.status,
+        allowedActions: allowedActionsFor(role, before.status),
+      });
+      return;
+    }
+
+    const fields = resolveRequisitionFields(db, input, id);
+    if ('error' in fields) {
+      res.status(400).json({ errors: { requisitionId: fields.error } });
+      return;
+    }
+
+    const previous: Record<EditedField, string> = {
+      firstName: before.firstName,
+      lastName: before.lastName,
+      personalEmail: before.personalEmail,
+      jobTitle: before.jobTitle,
+      department: before.department,
+      startDate: before.startDate,
+      requisitionId: before.requisitionId === null ? 'none' : String(before.requisitionId),
+    };
+    const next: Record<EditedField, string> = {
+      firstName: input.firstName,
+      lastName: input.lastName,
+      personalEmail: input.personalEmail,
+      jobTitle: fields.jobTitle,
+      department: fields.department,
+      startDate: input.startDate,
+      requisitionId: input.requisitionId === null ? 'none' : String(input.requisitionId),
+    };
+    const changed = EDITED_FIELDS.filter((field) => previous[field] !== next[field]);
+    const details = describeEdit(changed, previous, next);
+
+    // AB#edit-new-hire, criterion 2 and AB#audit-log, criterion 2: the update and its audit entry are saved together.
+    const saved = inTransaction(db, () => {
+      const updated = db
+        .prepare(
+          `UPDATE new_hires
+           SET first_name = ?, last_name = ?, personal_email = ?, job_title = ?, department = ?,
+               start_date = ?, requisition_id = ?,
+               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+           WHERE id = ? AND status = ?`,
+        )
+        .run(
+          input.firstName,
+          input.lastName,
+          input.personalEmail,
+          fields.jobTitle,
+          fields.department,
+          input.startDate,
+          input.requisitionId,
+          id,
+          expectedStatus,
+        );
+      if (Number(updated.changes) !== 1) {
+        return false;
+      }
+      writeAudit(db, { entityType: 'new_hire', entityId: id, action: 'edit', role, details });
+      return true;
+    });
+    if (!saved) {
+      // The status changed between the read above and the write, so nothing was written.
+      const latest = readStatus(db, id) ?? before.status;
+      res.status(409).json({
+        error: 'The new hire has changed since it was loaded. Reload to see its current status.',
+        currentStatus: latest,
+        allowedActions: allowedActionsFor(role, latest),
+      });
+      return;
+    }
+
+    const record = readDetail(db, id, role);
+    if (!record) {
+      throw new Error('Updated new hire could not be read back.');
+    }
+    res.status(200).json(record);
   });
 
   // AB#status-workflow, criterion 7: the status history, oldest first. Unknown id gives 404.
@@ -491,7 +753,7 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
     res.json(rows.map(toHistoryEntry));
   });
 
-  // AB#status-workflow, criteria 2 to 6: submit, approve or return a new hire.
+  // AB#status-workflow, criteria 2 to 6, AB#hold-release: submit, approve, return, hold, resume or release a new hire.
   // Order of checks: unknown id (404), unknown action (400), role (403), body (400),
   // stale expectedStatus (409), status not allowed for the action (409), blocking conditions (409).
   router.post('/:id/actions', express.json(), (req, res) => {
@@ -510,6 +772,7 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
     const action = source.action;
 
     // AB#status-workflow, criterion 4: an action the role may never perform gets 403 and changes nothing.
+    // AB#hold-release, criterion 6: hold, resume and release are hr_manager only.
     const role = roleOf(res);
     if (!ACTION_RULES[action].roles.includes(role)) {
       res.status(403).json({ error: 'Your role cannot perform this action.' });
@@ -543,7 +806,7 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
       return;
     }
 
-    // AB#status-workflow, criterion 6: submit and approve list every reason they are blocked.
+    // AB#status-workflow, criterion 6 and AB#hold-release, criterion 7: every blocking reason is listed.
     const reasons = actionBlockers(db, id, action);
     if (reasons.length > 0) {
       res.status(409).json({
@@ -555,7 +818,8 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
       return;
     }
 
-    if (!recordTransition(db, id, current as Status, request, role)) {
+    const to = targetStatus(db, id, action);
+    if (!recordTransition(db, id, current as Status, to, request, role)) {
       // The status changed between the read above and the write, so nothing was written.
       const latest = readStatus(db, id) ?? current;
       res.status(409).json({
@@ -589,8 +853,32 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
       return;
     }
 
-    saveCompensation(db, id, result.input);
-    const saved = readCompensation(db, id);
+    // AB#audit-log, criterion 4: the audit entry records only that compensation changed, never the amounts.
+    const role = roleOf(res);
+    // AB#hold-release, criterion 7: released is final, so compensation cannot change once released.
+    // The status is read inside the transaction so a release cannot happen between the check and the write.
+    const saved = inTransaction(db, () => {
+      if (readStatus(db, id) === 'released') {
+        return 'released' as const;
+      }
+      saveCompensation(db, id, result.input);
+      writeAudit(db, {
+        entityType: 'new_hire',
+        entityId: id,
+        action: 'compensation_changed',
+        role,
+        details: 'Compensation changed.',
+      });
+      return readCompensation(db, id);
+    });
+    if (saved === 'released') {
+      res.status(409).json({
+        error: 'A released new hire cannot be changed.',
+        currentStatus: 'released',
+        allowedActions: allowedActionsFor(role, 'released'),
+      });
+      return;
+    }
     if (!saved) {
       throw new Error('Saved compensation could not be read back.');
     }

@@ -22,6 +22,19 @@ export function checkDatabase(db: DatabaseSync): boolean {
   }
 }
 
+// Runs fn inside one IMMEDIATE transaction: committed when fn returns, rolled back when it throws.
+export function inTransaction<T>(db: DatabaseSync, fn: () => T): T {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = fn();
+    db.exec('COMMIT');
+    return result;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 // AB#foundation, criterion 3: apply pending *.sql files in name order, record
 // each one in schema_migrations, and apply nothing on later runs.
 // Returns the names of the migrations applied in this run.

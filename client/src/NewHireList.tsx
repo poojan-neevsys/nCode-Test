@@ -56,7 +56,8 @@ export function statusLabel(status: string): string {
 }
 
 // AB#status-workflow, criterion 10: the statuses offered by the list filter.
-const STATUS_FILTERS = ['draft', 'in_review', 'returned', 'approved'] as const;
+// AB#hold-release, criterion 11: on_hold and released are filter options too.
+const STATUS_FILTERS = ['draft', 'in_review', 'returned', 'approved', 'on_hold', 'released'] as const;
 
 // The filter is kept in the address bar as ?status=. An unknown value means no filter.
 function readStatusFilter(): string {

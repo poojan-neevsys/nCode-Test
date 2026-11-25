@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { apiFetch } from './api';
 import { Link } from './navigation';
 
 interface NewHire {
@@ -32,7 +33,7 @@ function isNewHire(value: unknown): value is NewHire {
 
 async function loadNewHires(signal: AbortSignal): Promise<ListState> {
   try {
-    const response = await fetch('/api/new-hires', { signal });
+    const response = await apiFetch('/api/new-hires', { signal });
     if (!response.ok) {
       return { kind: 'failed' };
     }
@@ -87,7 +88,9 @@ export function NewHireListPage() {
           <tbody>
             {state.items.map((item) => (
               <tr key={item.id}>
-                <td>{item.fullName}</td>
+                <td>
+                  <Link to={`/new-hires/${item.id}`}>{item.fullName}</Link>
+                </td>
                 <td>{item.jobTitle}</td>
                 <td>{item.department}</td>
                 <td>{item.startDate}</td>

@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
-import { currentPath, Link } from './navigation';
+import { useEffect, useState, type ReactNode } from 'react';
+import { apiFetch, readStoredRole, storeRole, type PortalRole } from './api';
+import { NewHireDetailPage } from './NewHireDetail';
 import { NewHireFormPage } from './NewHireForm';
 import { NewHireListPage } from './NewHireList';
+import { RoleSwitcher } from './RoleSwitcher';
+import { currentPath, Link } from './navigation';
 
 interface Health {
   status: string;
@@ -20,7 +23,7 @@ function isHealth(value: unknown): value is Health {
 // A 503 response still carries the JSON body, so it is read like a normal reply.
 async function loadHealth(signal: AbortSignal): Promise<Health> {
   try {
-    const response = await fetch('/api/health', { signal });
+    const response = await apiFetch('/api/health', { signal });
     const body: unknown = await response.json();
     if (isHealth(body)) {
       return body;
@@ -62,6 +65,8 @@ function HomePage() {
 export function App() {
   // AB#new-hire-draft: a small path switch; the pages are few, so no router package is needed.
   const [path, setPath] = useState(currentPath);
+  // AB#new-hire-compensation, criterion 7: the development role, remembered in storage.
+  const [role, setRole] = useState<PortalRole>(readStoredRole);
 
   useEffect(() => {
     const onLocationChange = () => setPath(currentPath());
@@ -73,11 +78,27 @@ export function App() {
     };
   }, []);
 
+  function changeRole(next: PortalRole) {
+    storeRole(next);
+    setRole(next);
+  }
+
+  let page: ReactNode;
+  const detailMatch = /^\/new-hires\/(\d+)$/.exec(path);
   if (path === '/new-hires') {
-    return <NewHireListPage />;
+    page = <NewHireListPage />;
+  } else if (path === '/new-hires/new') {
+    page = <NewHireFormPage />;
+  } else if (detailMatch) {
+    page = <NewHireDetailPage id={Number(detailMatch[1])} role={role} />;
+  } else {
+    page = <HomePage />;
   }
-  if (path === '/new-hires/new') {
-    return <NewHireFormPage />;
-  }
-  return <HomePage />;
+
+  return (
+    <>
+      <RoleSwitcher role={role} onChange={changeRole} />
+      {page}
+    </>
+  );
 }

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { apiFetch } from './api';
 import { Link, navigateTo } from './navigation';
 
 // Must match the field names the server returns in its 400 responses.
@@ -67,7 +68,7 @@ export function NewHireFormPage() {
 
     let response: Response;
     try {
-      response = await fetch('/api/new-hires', {
+      response = await apiFetch('/api/new-hires', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values),

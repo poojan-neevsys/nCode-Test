@@ -1,5 +1,6 @@
 import express, { type ErrorRequestHandler, Router } from 'express';
 import type { DatabaseSync } from 'node:sqlite';
+import { findLinkableRequisition } from './requisitions.js';
 
 // AB#new-hire-draft: the departments a new hire can be assigned to.
 export const DEPARTMENTS = ['Engineering', 'Finance', 'HR', 'Operations', 'Sales'] as const;
@@ -22,9 +23,10 @@ export interface NewHireInput {
   jobTitle: string;
   department: string;
   startDate: string;
+  requisitionId: number | null;
 }
 
-export type NewHireErrors = Partial<Record<NewHireField, string>>;
+export type NewHireErrors = Partial<Record<NewHireField | 'requisitionId', string>>;
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -56,10 +58,19 @@ function readText(source: Record<string, unknown>, field: NewHireField): string 
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
 // AB#new-hire-draft, criterion 3: validate on the server and report every invalid field.
 export function validateNewHire(body: unknown): { input: NewHireInput } | { errors: NewHireErrors } {
   const source: Record<string, unknown> =
     typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
+
+  // AB#requisition-link, criterion 3 and 5: the requisition is optional. Without one, nothing changes.
+  const rawRequisitionId = source.requisitionId;
+  const linkRequested = rawRequisitionId !== undefined && rawRequisitionId !== null;
+  const requisitionId = isPositiveInteger(rawRequisitionId) ? rawRequisitionId : null;
 
   const input: NewHireInput = {
     firstName: readText(source, 'firstName'),
@@ -68,20 +79,33 @@ export function validateNewHire(body: unknown): { input: NewHireInput } | { erro
     jobTitle: readText(source, 'jobTitle'),
     department: readText(source, 'department'),
     startDate: readText(source, 'startDate'),
+    requisitionId,
   };
 
   const errors: NewHireErrors = {};
   for (const field of REQUIRED_FIELDS) {
+    // AB#requisition-link, criterion 3: a linked requisition supplies the job title and department.
+    if (requisitionId !== null && (field === 'jobTitle' || field === 'department')) {
+      continue;
+    }
     if (input[field] === '') {
       errors[field] = 'This field is required.';
     }
+  }
+
+  if (linkRequested && requisitionId === null) {
+    errors.requisitionId = 'Choose a requisition from the list.';
   }
 
   if (input.personalEmail !== '' && !EMAIL_PATTERN.test(input.personalEmail)) {
     errors.personalEmail = 'Enter a valid email address.';
   }
 
-  if (input.department !== '' && !(DEPARTMENTS as readonly string[]).includes(input.department)) {
+  if (
+    requisitionId === null &&
+    input.department !== '' &&
+    !(DEPARTMENTS as readonly string[]).includes(input.department)
+  ) {
     errors.department = `Choose one of: ${DEPARTMENTS.join(', ')}.`;
   }
 
@@ -106,13 +130,14 @@ export interface NewHireRecord {
   department: string;
   startDate: string;
   status: string;
+  requisitionId: number | null;
   createdAt: string;
   updatedAt: string;
 }
 
 const SELECT_RECORD = `
   SELECT id, first_name, last_name, personal_email, job_title, department,
-         start_date, status, created_at, updated_at
+         start_date, status, requisition_id, created_at, updated_at
   FROM new_hires`;
 
 type Row = Record<string, unknown>;
@@ -127,6 +152,7 @@ function toRecord(row: Row): NewHireRecord {
     department: String(row.department),
     startDate: String(row.start_date),
     status: String(row.status),
+    requisitionId: row.requisition_id === null ? null : Number(row.requisition_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -146,11 +172,14 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
 
   // AB#new-hire-draft, criterion 5: newest first, with the fields the list shows.
   router.get('/', (_req, res) => {
+    // AB#requisition-link, criterion 7: the requisition number is shown, or null when not linked.
     const rows = db
       .prepare(
-        `SELECT id, first_name, last_name, job_title, department, start_date, status
-         FROM new_hires
-         ORDER BY created_at DESC, id DESC`,
+        `SELECT n.id, n.first_name, n.last_name, n.job_title, n.department, n.start_date, n.status,
+                r.number AS requisition_number
+         FROM new_hires n
+         LEFT JOIN requisitions r ON r.id = n.requisition_id
+         ORDER BY n.created_at DESC, n.id DESC`,
       )
       .all();
     res.json(
@@ -161,6 +190,7 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
         department: String(row.department),
         startDate: String(row.start_date),
         status: String(row.status),
+        requisitionNumber: row.requisition_number === null ? null : String(row.requisition_number),
       })),
     );
   });
@@ -174,19 +204,34 @@ export function createNewHiresRouter(db: DatabaseSync): Router {
     }
 
     const { input } = result;
+    let jobTitle = input.jobTitle;
+    let department = input.department;
+    if (input.requisitionId !== null) {
+      // AB#requisition-link, criteria 3 and 4: the requisition must be open and not linked yet.
+      // Its job title and department replace whatever was sent.
+      const linkable = findLinkableRequisition(db, input.requisitionId);
+      if ('error' in linkable) {
+        res.status(400).json({ errors: { requisitionId: linkable.error } });
+        return;
+      }
+      jobTitle = linkable.requisition.jobTitle;
+      department = linkable.requisition.department;
+    }
+
     const inserted = db
       .prepare(
         `INSERT INTO new_hires
-           (first_name, last_name, personal_email, job_title, department, start_date, status)
-         VALUES (?, ?, ?, ?, ?, ?, 'draft')`,
+           (first_name, last_name, personal_email, job_title, department, start_date, requisition_id, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')`,
       )
       .run(
         input.firstName,
         input.lastName,
         input.personalEmail,
-        input.jobTitle,
-        input.department,
+        jobTitle,
+        department,
         input.startDate,
+        input.requisitionId,
       );
 
     const row = db.prepare(`${SELECT_RECORD} WHERE id = ?`).get(Number(inserted.lastInsertRowid));

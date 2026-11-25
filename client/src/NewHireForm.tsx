@@ -1,8 +1,10 @@
 import { useState, type FormEvent } from 'react';
 import { Link, navigateTo } from './navigation';
+import { RequisitionPicker, type RequisitionOption } from './RequisitionPicker';
 
 // Must match the field names the server returns in its 400 responses.
 const FIELD_ORDER = [
+  'requisitionId',
   'firstName',
   'lastName',
   'personalEmail',
@@ -12,7 +14,8 @@ const FIELD_ORDER = [
 ] as const;
 
 type FieldName = (typeof FIELD_ORDER)[number];
-type Values = Record<FieldName, string>;
+type TextField = Exclude<FieldName, 'requisitionId'>;
+type Values = Record<TextField, string>;
 type FieldErrors = Partial<Record<FieldName, string>>;
 
 const DEPARTMENTS = ['Engineering', 'Finance', 'HR', 'Operations', 'Sales'];
@@ -29,7 +32,6 @@ const EMPTY_VALUES: Values = {
 function isFieldName(value: string): value is FieldName {
   return (FIELD_ORDER as readonly string[]).includes(value);
 }
-
 // Reads { "errors": { "<field>": "<message>" } } and ignores anything else.
 function readErrors(body: unknown): Record<string, string> {
   if (typeof body !== 'object' || body === null) {
@@ -54,9 +56,24 @@ export function NewHireFormPage() {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [requisition, setRequisition] = useState<RequisitionOption | null>(null);
+  // AB#requisition-link, criterion 6: while a requisition is selected, job title and department are locked.
+  const locked = requisition !== null;
 
-  function updateValue(field: FieldName, value: string) {
+  function updateValue(field: TextField, value: string) {
     setValues((current) => ({ ...current, [field]: value }));
+  }
+
+  // AB#requisition-link, criterion 6: choosing a requisition fills and locks the job title and department.
+  function selectRequisition(next: RequisitionOption | null) {
+    setRequisition(next);
+    if (next !== null) {
+      setValues((current) => ({
+        ...current,
+        jobTitle: next.jobTitle,
+        department: next.department,
+      }));
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -70,7 +87,7 @@ export function NewHireFormPage() {
       response = await fetch('/api/new-hires', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
+        body: JSON.stringify({ ...values, requisitionId: requisition ? requisition.id : null }),
       });
     } catch {
       setFormError('Could not reach the server. Your entries are kept; try again.');
@@ -135,6 +152,11 @@ export function NewHireFormPage() {
         </p>
       )}
       <form onSubmit={handleSubmit} noValidate>
+        <RequisitionPicker
+          selected={requisition}
+          error={fieldErrors.requisitionId}
+          onSelect={selectRequisition}
+        />
         <p>
           <label htmlFor="field-firstName">First name</label>{' '}
           <input
@@ -185,6 +207,7 @@ export function NewHireFormPage() {
             type="text"
             autoComplete="off"
             value={values.jobTitle}
+            disabled={locked}
             onChange={(event) => updateValue('jobTitle', event.target.value)}
             aria-invalid={fieldErrors.jobTitle ? true : undefined}
             aria-describedby={describedBy('jobTitle')}
@@ -197,6 +220,7 @@ export function NewHireFormPage() {
             id="field-department"
             name="department"
             value={values.department}
+            disabled={locked}
             onChange={(event) => updateValue('department', event.target.value)}
             aria-invalid={fieldErrors.department ? true : undefined}
             aria-describedby={describedBy('department')}

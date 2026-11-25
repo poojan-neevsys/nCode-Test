@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { checkDatabase } from './db.js';
 import { createNewHiresRouter } from './new-hires.js';
+import { createRequisitionsRouter } from './requisitions.js';
 
 export function createApp(db: DatabaseSync, clientDistDir: string): Express {
   const app = express();
@@ -19,6 +20,9 @@ export function createApp(db: DatabaseSync, clientDistDir: string): Express {
 
   // AB#new-hire-draft: new hire list and draft creation.
   app.use('/api/new-hires', createNewHiresRouter(db));
+
+  // AB#requisition-link, criterion 2: open requisition search for the create form.
+  app.use('/api/requisitions', createRequisitionsRouter(db));
 
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Not found' });

@@ -8,6 +8,7 @@ interface NewHire {
   department: string;
   startDate: string;
   status: string;
+  requisitionNumber: string | null;
 }
 
 type ListState =
@@ -26,7 +27,8 @@ function isNewHire(value: unknown): value is NewHire {
     typeof candidate.jobTitle === 'string' &&
     typeof candidate.department === 'string' &&
     typeof candidate.startDate === 'string' &&
-    typeof candidate.status === 'string'
+    typeof candidate.status === 'string' &&
+    (candidate.requisitionNumber === null || typeof candidate.requisitionNumber === 'string')
   );
 }
 
@@ -80,6 +82,7 @@ export function NewHireListPage() {
               <th scope="col">Name</th>
               <th scope="col">Job title</th>
               <th scope="col">Department</th>
+              <th scope="col">Requisition</th>
               <th scope="col">Start date</th>
               <th scope="col">Status</th>
             </tr>
@@ -90,6 +93,7 @@ export function NewHireListPage() {
                 <td>{item.fullName}</td>
                 <td>{item.jobTitle}</td>
                 <td>{item.department}</td>
+                <td>{item.requisitionNumber ?? '-'}</td>
                 <td>{item.startDate}</td>
                 <td>{statusLabel(item.status)}</td>
               </tr>

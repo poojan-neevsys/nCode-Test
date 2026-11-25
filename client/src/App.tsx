@@ -1,4 +1,7 @@
 import { useEffect, useState } from 'react';
+import { currentPath, Link } from './navigation';
+import { NewHireFormPage } from './NewHireForm';
+import { NewHireListPage } from './NewHireList';
 
 interface Health {
   status: string;
@@ -28,7 +31,7 @@ async function loadHealth(signal: AbortSignal): Promise<Health> {
   return { status: 'unreachable', database: 'unknown' };
 }
 
-export function App() {
+function HomePage() {
   const [health, setHealth] = useState<Health | null>(null);
 
   useEffect(() => {
@@ -49,6 +52,32 @@ export function App() {
           ? 'Checking service health...'
           : `Server status: ${health.status}. Database: ${health.database}.`}
       </p>
+      <p>
+        <Link to="/new-hires">New hires</Link>
+      </p>
     </main>
   );
+}
+
+export function App() {
+  // AB#new-hire-draft: a small path switch; the pages are few, so no router package is needed.
+  const [path, setPath] = useState(currentPath);
+
+  useEffect(() => {
+    const onLocationChange = () => setPath(currentPath());
+    window.addEventListener('popstate', onLocationChange);
+    window.addEventListener('locationchange', onLocationChange);
+    return () => {
+      window.removeEventListener('popstate', onLocationChange);
+      window.removeEventListener('locationchange', onLocationChange);
+    };
+  }, []);
+
+  if (path === '/new-hires') {
+    return <NewHireListPage />;
+  }
+  if (path === '/new-hires/new') {
+    return <NewHireFormPage />;
+  }
+  return <HomePage />;
 }

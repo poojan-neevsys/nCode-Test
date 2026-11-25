@@ -2,6 +2,7 @@ import express, { type ErrorRequestHandler, type Express } from 'express';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { checkDatabase } from './db.js';
+import { createNewHiresRouter } from './new-hires.js';
 
 export function createApp(db: DatabaseSync, clientDistDir: string): Express {
   const app = express();
@@ -15,6 +16,9 @@ export function createApp(db: DatabaseSync, clientDistDir: string): Express {
       database: databaseOk ? 'ok' : 'error',
     });
   });
+
+  // AB#new-hire-draft: new hire list and draft creation.
+  app.use('/api/new-hires', createNewHiresRouter(db));
 
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Not found' });

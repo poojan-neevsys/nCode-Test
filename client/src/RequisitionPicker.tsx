@@ -1,4 +1,5 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
+import { portalHeaders } from './role';
 
 export interface RequisitionOption {
   id: number;
@@ -33,7 +34,10 @@ function isRequisitionOption(value: unknown): value is RequisitionOption {
 
 async function searchRequisitions(text: string, signal: AbortSignal): Promise<SearchState> {
   try {
-    const response = await fetch(`/api/requisitions?q=${encodeURIComponent(text)}`, { signal });
+    const response = await fetch(`/api/requisitions?q=${encodeURIComponent(text)}`, {
+      signal,
+      headers: portalHeaders(),
+    });
     if (!response.ok) {
       return { kind: 'failed' };
     }

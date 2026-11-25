@@ -32,9 +32,11 @@ function containsPattern(text: string): string {
 
 // AB#requisition-link, criteria 3 and 4: the requisition may be linked only when it exists,
 // is open and is not linked to a new hire yet.
+// exceptNewHireId: when editing a new hire that already holds this requisition, that link does not count as taken.
 export function findLinkableRequisition(
   db: DatabaseSync,
   id: number,
+  exceptNewHireId?: number,
 ): { requisition: RequisitionSummary } | { error: string } {
   const row = db
     .prepare(
@@ -49,7 +51,9 @@ export function findLinkableRequisition(
   if (String(row.status) !== 'open') {
     return { error: 'The requisition is not open.' };
   }
-  const linked = db.prepare('SELECT id FROM new_hires WHERE requisition_id = ?').get(id);
+  const linked = db
+    .prepare('SELECT id FROM new_hires WHERE requisition_id = ? AND id <> ?')
+    .get(id, exceptNewHireId ?? 0);
   if (linked) {
     return { error: 'The requisition is already linked to another new hire.' };
   }

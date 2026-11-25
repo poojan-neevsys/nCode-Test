@@ -22,6 +22,8 @@ interface NewHireDetailRecord {
   startDate: string;
   status: string;
   requisitionNumber: string | null;
+  // AB#edit-hold-release, criterion 4: the reason for the hold, shown in the banner while on hold.
+  holdReason?: string | null;
   // Present only when the server answered for hr_manager.
   compensation?: Compensation | null;
 }
@@ -37,27 +39,69 @@ interface HistoryEntry {
   createdAt: string;
 }
 
-type Action = 'submit' | 'approve' | 'return';
+// AB#edit-hold-release, criterion 12: one entry of the audit log, as the server returns it to hr_manager.
+interface AuditEntry {
+  id: number;
+  action: string;
+  role: string;
+  details: unknown;
+  createdAt: string;
+}
+
+type Action = 'submit' | 'approve' | 'return' | 'hold' | 'resume' | 'release';
 
 // AB#status-workflow: mirrors the server rules so that only the allowed buttons are shown.
 // The server checks every action again, so this list is for display only.
+// AB#edit-hold-release, criteria 4 to 7: hold, resume and release.
 const ACTION_RULES: Record<Action, { roles: readonly PortalRole[]; from: readonly string[] }> = {
   submit: { roles: ['hr_coordinator', 'hr_manager'], from: ['draft', 'returned'] },
   approve: { roles: ['hr_manager'], from: ['in_review'] },
   return: { roles: ['hr_manager'], from: ['in_review'] },
+  hold: { roles: ['hr_manager'], from: ['in_review', 'approved'] },
+  resume: { roles: ['hr_manager'], from: ['on_hold'] },
+  release: { roles: ['hr_manager'], from: ['approved'] },
 };
-const ACTION_ORDER: readonly Action[] = ['submit', 'approve', 'return'];
+const ACTION_ORDER: readonly Action[] = ['submit', 'approve', 'return', 'hold', 'resume', 'release'];
 const ACTION_LABELS: Record<Action, string> = {
   submit: 'Submit for review',
   approve: 'Approve',
   return: 'Return',
+  hold: 'Hold',
+  resume: 'Resume',
+  release: 'Release',
+};
+// AB#edit-hold-release, criterion 12: labels for the audit log actions, including the non-status ones.
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  ...ACTION_LABELS,
+  create: 'Created',
+  edit: 'Edited',
+  compensation: 'Compensation changed',
 };
 const ROLE_LABELS: Record<string, string> = {
   hr_coordinator: 'HR coordinator',
   hr_manager: 'HR manager',
 };
 // AB#status-workflow, criterion 6: the return comment is limited to 500 characters.
+// AB#edit-hold-release, criterion 4: the hold reason has the same limit.
 const COMMENT_MAX_LENGTH = 500;
+
+// The dialogs that ask for text (return and hold) share one layout; release has its own confirmation.
+type ReasonDialogKind = 'return' | 'hold';
+type DialogKind = ReasonDialogKind | 'release';
+const REASON_DIALOGS: Record<ReasonDialogKind, { title: string; label: string; confirm: string; empty: string }> = {
+  return: {
+    title: 'Return new hire',
+    label: `Comment for the HR coordinator (required, up to ${COMMENT_MAX_LENGTH} characters)`,
+    confirm: 'Return new hire',
+    empty: 'Enter a comment explaining what needs to change.',
+  },
+  hold: {
+    title: 'Put new hire on hold',
+    label: `Reason for the hold (required, up to ${COMMENT_MAX_LENGTH} characters)`,
+    confirm: 'Put on hold',
+    empty: 'Enter a reason for the hold.',
+  },
+};
 
 function allowedActionsFor(role: PortalRole, status: string): Action[] {
   return ACTION_ORDER.filter(
@@ -81,11 +125,14 @@ function latestReturnEntry(history: HistoryEntry[]): HistoryEntry | undefined {
     .find((entry) => entry.action === 'return' && entry.comment !== null);
 }
 
+// AB#edit-hold-release, criterion 2: Edit is offered for these statuses only.
+const EDITABLE_STATUSES = ['draft', 'returned'];
+
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'failed' }
   | { kind: 'notFound' }
-  | { kind: 'ready'; record: NewHireDetailRecord; history: HistoryEntry[] };
+  | { kind: 'ready'; record: NewHireDetailRecord; history: HistoryEntry[]; audit: AuditEntry[] };
 
 function isCompensation(value: unknown): value is Compensation {
   if (typeof value !== 'object' || value === null) {
@@ -115,6 +162,9 @@ function isNewHireDetail(value: unknown): value is NewHireDetailRecord {
     typeof candidate.startDate === 'string' &&
     typeof candidate.status === 'string' &&
     (candidate.requisitionNumber === null || typeof candidate.requisitionNumber === 'string') &&
+    (candidate.holdReason === undefined ||
+      candidate.holdReason === null ||
+      typeof candidate.holdReason === 'string') &&
     (candidate.compensation === undefined ||
       candidate.compensation === null ||
       isCompensation(candidate.compensation))
@@ -137,22 +187,90 @@ function isHistoryEntry(value: unknown): value is HistoryEntry {
   );
 }
 
-async function loadNewHire(id: number, signal: AbortSignal): Promise<LoadState> {
+function isAuditEntry(value: unknown): value is AuditEntry {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === 'number' &&
+    typeof candidate.action === 'string' &&
+    typeof candidate.role === 'string' &&
+    typeof candidate.details === 'object' &&
+    candidate.details !== null &&
+    typeof candidate.createdAt === 'string'
+  );
+}
+
+// AB#edit-hold-release, criterion 12: one line per fact in an audit entry's details.
+// Values are shown as text only; nothing from the server is put into the page as HTML.
+function describeAudit(details: unknown): string[] {
+  if (typeof details !== 'object' || details === null) {
+    return [];
+  }
+  const source = details as Record<string, unknown>;
+  const lines: string[] = [];
+  const show = (value: unknown) => (value === null || value === undefined || value === '' ? '-' : String(value));
+
+  if (Array.isArray(source.changes)) {
+    for (const change of source.changes) {
+      if (typeof change !== 'object' || change === null) {
+        continue;
+      }
+      const item = change as Record<string, unknown>;
+      const field = typeof item.field === 'string' ? item.field : 'field';
+      if ('from' in item || 'to' in item) {
+        lines.push(`${field}: ${show(item.from)} to ${show(item.to)}`);
+      } else {
+        // Compensation changes record only that the value changed, never the amounts.
+        lines.push(`${field} changed`);
+      }
+    }
+  }
+  if (typeof source.toStatus === 'string') {
+    lines.push(
+      typeof source.fromStatus === 'string'
+        ? `Status: ${statusLabel(source.fromStatus)} to ${statusLabel(source.toStatus)}`
+        : `Status: ${statusLabel(source.toStatus)}`,
+    );
+  }
+  if (typeof source.comment === 'string' && source.comment !== '') {
+    lines.push(`Note: ${source.comment}`);
+  }
+  return lines;
+}
+
+async function loadNewHire(id: number, role: PortalRole, signal: AbortSignal): Promise<LoadState> {
   try {
-    const [detailResponse, historyResponse] = await Promise.all([
-      fetch(`/api/new-hires/${id}`, { signal, headers: portalHeaders() }),
-      fetch(`/api/new-hires/${id}/history`, { signal, headers: portalHeaders() }),
+    const detailRequest = fetch(`/api/new-hires/${id}`, { signal, headers: portalHeaders() });
+    const historyRequest = fetch(`/api/new-hires/${id}/history`, { signal, headers: portalHeaders() });
+    // AB#edit-hold-release, criterion 12: the audit log is requested for hr_manager only.
+    const auditRequest =
+      role === 'hr_manager'
+        ? fetch(`/api/audit?entityType=new_hire&entityId=${id}`, { signal, headers: portalHeaders() })
+        : null;
+    const [detailResponse, historyResponse, auditResponse] = await Promise.all([
+      detailRequest,
+      historyRequest,
+      auditRequest,
     ]);
     if (detailResponse.status === 404) {
       return { kind: 'notFound' };
     }
-    if (!detailResponse.ok || !historyResponse.ok) {
+    if (!detailResponse.ok || !historyResponse.ok || (auditResponse !== null && !auditResponse.ok)) {
       return { kind: 'failed' };
     }
     const body: unknown = await detailResponse.json();
     const history: unknown = await historyResponse.json();
-    if (isNewHireDetail(body) && Array.isArray(history) && history.every(isHistoryEntry)) {
-      return { kind: 'ready', record: body, history };
+    const audit: unknown = auditResponse === null ? [] : await auditResponse.json();
+    if (
+      isNewHireDetail(body) &&
+      Array.isArray(history) &&
+      history.every(isHistoryEntry) &&
+      Array.isArray(audit) &&
+      audit.every(isAuditEntry)
+    ) {
+      return { kind: 'ready', record: body, history, audit };
     }
   } catch {
     // Aborted or unreachable: fall through to the failed state below.
@@ -179,17 +297,20 @@ function readMessage(body: unknown): string {
 
 // AB#comp-view, criterion 7: the detail page. The compensation section is only rendered for hr_manager.
 // AB#status-workflow, criteria 8 to 10: status, allowed actions, history, and the return dialog.
+// AB#edit-hold-release, criteria 2 to 12: edit link, hold and release, the hold banner, and the audit section.
 export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [busyAction, setBusyAction] = useState<Action | null>(null);
   const [actionError, setActionError] = useState('');
   const [actionReasons, setActionReasons] = useState<string[]>([]);
   const [actionMessage, setActionMessage] = useState('');
-  const [returnOpen, setReturnOpen] = useState(false);
-  const [returnComment, setReturnComment] = useState('');
-  const [returnCommentError, setReturnCommentError] = useState('');
-  const returnButtonRef = useRef<HTMLButtonElement>(null);
-  const returnCommentRef = useRef<HTMLTextAreaElement>(null);
+  const [dialog, setDialog] = useState<DialogKind | null>(null);
+  const [reasonText, setReasonText] = useState('');
+  const [reasonError, setReasonError] = useState('');
+  // The control that opened the dialog gets focus back when the dialog closes.
+  const dialogTriggerRef = useRef<HTMLElement | null>(null);
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
+  const releaseCancelRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const actionAlertRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLParagraphElement>(null);
@@ -197,7 +318,7 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
   useEffect(() => {
     const controller = new AbortController();
     setState({ kind: 'loading' });
-    loadNewHire(id, controller.signal).then((result) => {
+    loadNewHire(id, role, controller.signal).then((result) => {
       if (!controller.signal.aborted) {
         setState(result);
       }
@@ -206,25 +327,35 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
     // Reload when the role changes so the server returns the fields that role may see.
   }, [id, role]);
 
-  // AB#status-workflow, criterion 9: focus moves into the return dialog when it opens.
+  // AB#status-workflow, criterion 9 and AB#edit-hold-release, criterion 11: focus moves into the dialog when it opens.
   useEffect(() => {
-    if (returnOpen) {
-      returnCommentRef.current?.focus();
+    if (dialog === 'return' || dialog === 'hold') {
+      reasonRef.current?.focus();
+    } else if (dialog === 'release') {
+      // Cancel is focused first, so a stray Enter does not release the new hire.
+      releaseCancelRef.current?.focus();
     }
-  }, [returnOpen]);
+  }, [dialog]);
 
-  // AB#status-workflow, criterion 9: Escape closes the dialog and focus goes back to the Return button.
-  function closeReturnDialog() {
-    setReturnOpen(false);
-    setReturnCommentError('');
-    returnButtonRef.current?.focus();
+  function openDialog(kind: DialogKind) {
+    dialogTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setReasonText('');
+    setReasonError('');
+    setDialog(kind);
+  }
+
+  // AB#status-workflow, criterion 9: Escape closes the dialog and focus goes back to the button that opened it.
+  function closeDialog() {
+    setDialog(null);
+    setReasonError('');
+    dialogTriggerRef.current?.focus();
   }
 
   // AB#status-workflow, criterion 9: Tab and Shift+Tab stay inside the dialog while it is open.
   function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Escape') {
       event.preventDefault();
-      closeReturnDialog();
+      closeDialog();
       return;
     }
     if (event.key !== 'Tab' || !dialogRef.current) {
@@ -250,11 +381,8 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
   }
 
   // AB#status-workflow, criteria 2 to 6: sends one action. The server decides whether it is allowed.
-  async function runAction(
-    record: NewHireDetailRecord,
-    action: Action,
-    comment: string | null,
-  ): Promise<boolean> {
+  // AB#edit-hold-release, criterion 4: the hold reason is sent in `reason`; the return comment in `comment`.
+  async function runAction(record: NewHireDetailRecord, action: Action, text: string | null): Promise<boolean> {
     setBusyAction(action);
     setActionError('');
     setActionReasons([]);
@@ -265,7 +393,12 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
       response = await fetch(`/api/new-hires/${record.id}/actions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...portalHeaders() },
-        body: JSON.stringify({ action, expectedStatus: record.status, comment }),
+        body: JSON.stringify({
+          action,
+          expectedStatus: record.status,
+          comment: action === 'hold' ? null : text,
+          reason: action === 'hold' ? text : null,
+        }),
       });
     } catch {
       setActionError('Could not reach the server. Try again.');
@@ -282,10 +415,10 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
     }
 
     if (response.status === 200) {
-      const refreshed = await loadNewHire(record.id, new AbortController().signal);
+      const refreshed = await loadNewHire(record.id, role, new AbortController().signal);
       setState(refreshed);
-      setReturnOpen(false);
-      setReturnComment('');
+      setDialog(null);
+      setReasonText('');
       setBusyAction(null);
       if (refreshed.kind === 'ready') {
         setActionMessage(`Status is now ${statusLabel(refreshed.record.status)}.`);
@@ -296,9 +429,10 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
 
     if (response.status === 400) {
       const serverErrors = readErrors(body);
-      if (serverErrors.comment !== undefined) {
-        setReturnCommentError(serverErrors.comment);
-        returnCommentRef.current?.focus();
+      const reasonMessage = serverErrors.reason ?? serverErrors.comment;
+      if (reasonMessage !== undefined && (action === 'hold' || action === 'return')) {
+        setReasonError(reasonMessage);
+        reasonRef.current?.focus();
       } else {
         setActionError('Could not complete this action. Check the details and try again.');
         actionAlertRef.current?.focus();
@@ -307,9 +441,9 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
       // The status may have changed: show the reasons and reload the current status.
       setActionError(readMessage(body) || 'This action cannot be completed now.');
       setActionReasons(readReasons(body));
-      setReturnOpen(false);
-      setReturnCommentError('');
-      const refreshed = await loadNewHire(record.id, new AbortController().signal);
+      setDialog(null);
+      setReasonError('');
+      const refreshed = await loadNewHire(record.id, role, new AbortController().signal);
       setState(refreshed);
       actionAlertRef.current?.focus();
     } else if (response.status === 403) {
@@ -323,22 +457,31 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
     return false;
   }
 
-  // AB#status-workflow, criterion 6: the comment is checked here too, before the request is sent.
-  async function confirmReturn(record: NewHireDetailRecord) {
+  // AB#status-workflow, criterion 6 and AB#edit-hold-release, criterion 4: the reason is checked here too,
+  // before the request is sent.
+  async function confirmReason(record: NewHireDetailRecord, kind: ReasonDialogKind) {
     // Length is checked on the raw text, before trimming, the same as the server does.
-    if (Array.from(returnComment).length > COMMENT_MAX_LENGTH) {
-      setReturnCommentError(`Comment must be ${COMMENT_MAX_LENGTH} characters or fewer.`);
-      returnCommentRef.current?.focus();
+    if (Array.from(reasonText).length > COMMENT_MAX_LENGTH) {
+      setReasonError(`Must be ${COMMENT_MAX_LENGTH} characters or fewer.`);
+      reasonRef.current?.focus();
       return;
     }
-    const trimmed = returnComment.trim();
+    const trimmed = reasonText.trim();
     if (trimmed === '') {
-      setReturnCommentError('Enter a comment explaining what needs to change.');
-      returnCommentRef.current?.focus();
+      setReasonError(REASON_DIALOGS[kind].empty);
+      reasonRef.current?.focus();
       return;
     }
-    setReturnCommentError('');
-    await runAction(record, 'return', trimmed);
+    setReasonError('');
+    await runAction(record, kind, trimmed);
+  }
+
+  function renderAuditDetails(details: unknown) {
+    const lines = describeAudit(details);
+    if (lines.length === 0) {
+      return '-';
+    }
+    return lines.map((line) => <div key={line}>{line}</div>);
   }
 
   return (
@@ -351,6 +494,13 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
       {state.kind === 'notFound' && <p role="alert">New hire not found.</p>}
       {state.kind === 'ready' && (
         <>
+          {state.record.status === 'on_hold' && (
+            // AB#edit-hold-release, criterion 4: the banner shows the reason the new hire is on hold.
+            <section aria-labelledby="hold-banner-heading" className="banner">
+              <h2 id="hold-banner-heading">On hold</h2>
+              <p>{state.record.holdReason ? `Reason: ${state.record.holdReason}` : 'No reason was recorded.'}</p>
+            </section>
+          )}
           {state.record.status === 'returned' &&
             (() => {
               const returned = latestReturnEntry(state.history);
@@ -378,6 +528,11 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
             <dt>Status</dt>
             <dd>{statusLabel(state.record.status)}</dd>
           </dl>
+          {EDITABLE_STATUSES.includes(state.record.status) && (
+            <p>
+              <Link to={`/new-hires/${state.record.id}/edit`}>Edit new hire</Link>
+            </p>
+          )}
 
           <section aria-labelledby="review-heading">
             <h2 id="review-heading">Review</h2>
@@ -399,11 +554,10 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
               {allowedActionsFor(role, state.record.status).map((action, index) => (
                 <Fragment key={action}>
                   {index > 0 && ' '}
-                  {action === 'return' ? (
+                  {action === 'return' || action === 'hold' || action === 'release' ? (
                     <button
-                      ref={returnButtonRef}
                       type="button"
-                      onClick={() => setReturnOpen(true)}
+                      onClick={() => openDialog(action as DialogKind)}
                       disabled={busyAction !== null}
                     >
                       {ACTION_LABELS[action]}
@@ -420,52 +574,74 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
                 </Fragment>
               ))}
             </p>
-            {returnOpen && (
+            {dialog !== null && (
               <div
                 ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
-                aria-labelledby="return-dialog-title"
+                aria-labelledby="dialog-title"
                 onKeyDown={handleDialogKeyDown}
               >
-                <h3 id="return-dialog-title">Return new hire</h3>
-                <p>
-                  <label htmlFor="return-comment">
-                    Comment for the HR coordinator (required, up to {COMMENT_MAX_LENGTH} characters)
-                  </label>
-                </p>
-                <p>
-                  <textarea
-                    id="return-comment"
-                    name="comment"
-                    rows={4}
-                    cols={50}
-                    value={returnComment}
-                    ref={returnCommentRef}
-                    onChange={(event) => setReturnComment(event.target.value)}
-                    aria-invalid={returnCommentError ? true : undefined}
-                    aria-describedby={returnCommentError ? 'return-comment-error' : undefined}
-                  />
-                </p>
-                {returnCommentError && (
-                  <p>
-                    <span id="return-comment-error" className="field-error">
-                      {returnCommentError}
-                    </span>
-                  </p>
+                {dialog === 'release' ? (
+                  // AB#edit-hold-release, criterion 11: the release dialog warns that it cannot be undone.
+                  <>
+                    <h3 id="dialog-title">Release new hire</h3>
+                    <p>
+                      {`Release ${state.record.firstName} ${state.record.lastName} to onboarding? This cannot be undone, and a released new hire cannot be changed or acted on again.`}
+                    </p>
+                    <p>
+                      <button
+                        type="button"
+                        onClick={() => runAction(state.record, 'release', null)}
+                        disabled={busyAction !== null}
+                      >
+                        Release new hire
+                      </button>{' '}
+                      <button type="button" ref={releaseCancelRef} onClick={closeDialog}>
+                        Cancel
+                      </button>
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h3 id="dialog-title">{REASON_DIALOGS[dialog].title}</h3>
+                    <p>
+                      <label htmlFor="reason-text">{REASON_DIALOGS[dialog].label}</label>
+                    </p>
+                    <p>
+                      <textarea
+                        id="reason-text"
+                        name="reason"
+                        rows={4}
+                        cols={50}
+                        value={reasonText}
+                        ref={reasonRef}
+                        onChange={(event) => setReasonText(event.target.value)}
+                        aria-invalid={reasonError ? true : undefined}
+                        aria-describedby={reasonError ? 'reason-error' : undefined}
+                      />
+                    </p>
+                    {reasonError && (
+                      <p>
+                        <span id="reason-error" className="field-error">
+                          {reasonError}
+                        </span>
+                      </p>
+                    )}
+                    <p>
+                      <button
+                        type="button"
+                        onClick={() => confirmReason(state.record, dialog)}
+                        disabled={busyAction !== null}
+                      >
+                        {REASON_DIALOGS[dialog].confirm}
+                      </button>{' '}
+                      <button type="button" onClick={closeDialog}>
+                        Cancel
+                      </button>
+                    </p>
+                  </>
                 )}
-                <p>
-                  <button
-                    type="button"
-                    onClick={() => confirmReturn(state.record)}
-                    disabled={busyAction !== null}
-                  >
-                    Return new hire
-                  </button>{' '}
-                  <button type="button" onClick={closeReturnDialog}>
-                    Cancel
-                  </button>
-                </p>
               </div>
             )}
             <p role="status" tabIndex={-1} ref={messageRef}>
@@ -506,6 +682,39 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
               </table>
             )}
           </section>
+
+          {role === 'hr_manager' && (
+            // AB#edit-hold-release, criterion 12: the audit entries for this new hire, newest first.
+            <section aria-labelledby="audit-heading">
+              <h2 id="audit-heading">Audit</h2>
+              {state.audit.length === 0 ? (
+                <p>No audit entries yet.</p>
+              ) : (
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Time</th>
+                      <th scope="col">Role</th>
+                      <th scope="col">Action</th>
+                      <th scope="col">Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {state.audit.map((entry) => (
+                      <tr key={entry.id}>
+                        <td>
+                          <time dateTime={entry.createdAt}>{formatDate(entry.createdAt)}</time>
+                        </td>
+                        <td>{roleLabel(entry.role)}</td>
+                        <td>{AUDIT_ACTION_LABELS[entry.action] ?? entry.action}</td>
+                        <td>{renderAuditDetails(entry.details)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
+          )}
 
           {role === 'hr_manager' && (
             <CompensationSection
@@ -640,6 +849,8 @@ function CompensationSection({
       }
     } else if (response.status === 403) {
       setFormError('Only HR managers can change compensation.');
+    } else if (response.status === 409) {
+      setFormError('A released new hire cannot be changed. Compensation was not saved.');
     } else {
       setFormError('Could not save the compensation. Your entries are kept; try again.');
     }

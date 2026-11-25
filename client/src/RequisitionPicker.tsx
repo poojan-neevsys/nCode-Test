@@ -60,7 +60,8 @@ interface RequisitionPickerProps {
 // AB#requisition-link, criteria 6 and 7: a combobox that lists open requisitions,
 // supports arrow keys, Enter and Escape, and announces the results.
 export function RequisitionPicker({ selected, error, onSelect }: RequisitionPickerProps) {
-  const [text, setText] = useState('');
+  // The edit form opens with the linked requisition's number in the box.
+  const [text, setText] = useState(selected?.number ?? '');
   const [search, setSearch] = useState<SearchState>({ kind: 'idle' });
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
@@ -181,7 +182,9 @@ export function RequisitionPicker({ selected, error, onSelect }: RequisitionPick
       <p id="requisition-hint">
         {selected === null
           ? 'Type at least two characters of the number or job title to find an open requisition. Optional.'
-          : `Hiring manager: ${selected.hiringManagerName}`}
+          : selected.hiringManagerName === ''
+            ? 'Job title and department come from the requisition.'
+            : `Hiring manager: ${selected.hiringManagerName}`}
       </p>
       {/* Options keep focus in the input on mouse down, so a click is not cut short by the blur handler. */}
       {listVisible && (

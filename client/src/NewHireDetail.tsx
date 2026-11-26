@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { readErrors } from './NewHireForm';
-import { statusLabel } from './NewHireList';
+import { StatusBadge, statusLabel } from './NewHireList';
 import { Link } from './navigation';
 import { portalHeaders, type PortalRole } from './role';
 
@@ -69,6 +69,15 @@ const ACTION_LABELS: Record<Action, string> = {
   hold: 'Hold',
   resume: 'Resume',
   release: 'Release',
+};
+// Visual design story, criterion 7: primary for the main action, danger for Return and Release, secondary otherwise.
+const ACTION_BUTTON_CLASS: Record<Action, string> = {
+  submit: 'btn btn-primary',
+  approve: 'btn btn-primary',
+  return: 'btn btn-danger',
+  hold: 'btn btn-secondary',
+  resume: 'btn btn-secondary',
+  release: 'btn btn-danger',
 };
 // AB#edit-hold-release, criterion 12: labels for the audit log actions, including the non-status ones.
 const AUDIT_ACTION_LABELS: Record<string, string> = {
@@ -487,7 +496,7 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
   return (
     <main>
       <h1>New hire details</h1>
-      {state.kind === 'loading' && <p role="status">Loading new hire...</p>}
+      {state.kind === 'loading' && <p role="status" className="state-loading">Loading new hire...</p>}
       {state.kind === 'failed' && (
         <p role="alert">Could not load this new hire. Try again later.</p>
       )}
@@ -512,7 +521,7 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
                 </section>
               ) : null;
             })()}
-          <dl>
+          <dl className="details-list">
             <dt>Name</dt>
             <dd>{`${state.record.firstName} ${state.record.lastName}`}</dd>
             <dt>Personal email</dt>
@@ -526,11 +535,15 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
             <dt>Start date</dt>
             <dd>{state.record.startDate}</dd>
             <dt>Status</dt>
-            <dd>{statusLabel(state.record.status)}</dd>
+            <dd>
+              <StatusBadge status={state.record.status} />
+            </dd>
           </dl>
           {EDITABLE_STATUSES.includes(state.record.status) && (
             <p>
-              <Link to={`/new-hires/${state.record.id}/edit`}>Edit new hire</Link>
+              <Link to={`/new-hires/${state.record.id}/edit`} className="btn btn-secondary">
+                Edit new hire
+              </Link>
             </p>
           )}
 
@@ -550,13 +563,14 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
                 </div>
               )}
             </div>
-            <p>
+            <div className="button-row">
               {allowedActionsFor(role, state.record.status).map((action, index) => (
                 <Fragment key={action}>
                   {index > 0 && ' '}
                   {action === 'return' || action === 'hold' || action === 'release' ? (
                     <button
                       type="button"
+                      className={ACTION_BUTTON_CLASS[action]}
                       onClick={() => openDialog(action as DialogKind)}
                       disabled={busyAction !== null}
                     >
@@ -565,6 +579,7 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
                   ) : (
                     <button
                       type="button"
+                      className={ACTION_BUTTON_CLASS[action]}
                       onClick={() => runAction(state.record, action, null)}
                       disabled={busyAction !== null}
                     >
@@ -573,7 +588,7 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
                   )}
                 </Fragment>
               ))}
-            </p>
+            </div>
             {dialog !== null && (
               <div
                 ref={dialogRef}
@@ -592,12 +607,13 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
                     <p>
                       <button
                         type="button"
+                        className="btn btn-danger"
                         onClick={() => runAction(state.record, 'release', null)}
                         disabled={busyAction !== null}
                       >
                         Release new hire
                       </button>{' '}
-                      <button type="button" ref={releaseCancelRef} onClick={closeDialog}>
+                      <button type="button" className="btn btn-secondary" ref={releaseCancelRef} onClick={closeDialog}>
                         Cancel
                       </button>
                     </p>
@@ -631,12 +647,13 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
                     <p>
                       <button
                         type="button"
+                        className={dialog === 'return' ? 'btn btn-danger' : 'btn btn-primary'}
                         onClick={() => confirmReason(state.record, dialog)}
                         disabled={busyAction !== null}
                       >
                         {REASON_DIALOGS[dialog].confirm}
                       </button>{' '}
-                      <button type="button" onClick={closeDialog}>
+                      <button type="button" className="btn btn-secondary" onClick={closeDialog}>
                         Cancel
                       </button>
                     </p>
@@ -652,8 +669,9 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
           <section aria-labelledby="history-heading">
             <h2 id="history-heading">Status history</h2>
             {state.history.length === 0 ? (
-              <p>No status changes yet.</p>
+              <p className="empty-state">No status changes yet.</p>
             ) : (
+              <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
@@ -671,8 +689,12 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
                       <td>
                         <time dateTime={entry.createdAt}>{formatDate(entry.createdAt)}</time>
                       </td>
-                      <td>{statusLabel(entry.fromStatus)}</td>
-                      <td>{statusLabel(entry.toStatus)}</td>
+                      <td>
+                        <StatusBadge status={entry.fromStatus} />
+                      </td>
+                      <td>
+                        <StatusBadge status={entry.toStatus} />
+                      </td>
                       <td>{ACTION_LABELS[entry.action as Action] ?? entry.action}</td>
                       <td>{roleLabel(entry.role)}</td>
                       <td>{entry.comment ?? '-'}</td>
@@ -680,6 +702,7 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </section>
 
@@ -688,8 +711,9 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
             <section aria-labelledby="audit-heading">
               <h2 id="audit-heading">Audit</h2>
               {state.audit.length === 0 ? (
-                <p>No audit entries yet.</p>
+                <p className="empty-state">No audit entries yet.</p>
               ) : (
+                <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
@@ -712,6 +736,7 @@ export function NewHireDetailPage({ id, role }: { id: number; role: PortalRole }
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </section>
           )}
@@ -874,9 +899,9 @@ function CompensationSection({
     <section aria-labelledby="compensation-heading">
       <h2 id="compensation-heading">Compensation</h2>
       {saved === null ? (
-        <p>No compensation recorded yet.</p>
+        <p className="empty-state">No compensation recorded yet.</p>
       ) : (
-        <dl>
+        <dl className="details-list">
           <dt>Base salary</dt>
           <dd>{`${saved.baseSalary} ${saved.currency}`}</dd>
           <dt>Bonus target</dt>
@@ -889,8 +914,8 @@ function CompensationSection({
         </p>
       )}
       <form onSubmit={handleSubmit} noValidate>
-        <p>
-          <label htmlFor="comp-baseSalary">Base salary (whole number, 1 to 10000000)</label>{' '}
+        <div className="field">
+          <label htmlFor="comp-baseSalary">Base salary (whole number, 1 to 10000000)</label>
           <input
             id="comp-baseSalary"
             name="baseSalary"
@@ -905,9 +930,9 @@ function CompensationSection({
             aria-describedby={describedBy('baseSalary')}
           />
           {renderError('baseSalary')}
-        </p>
-        <p>
-          <label htmlFor="comp-currency">Currency</label>{' '}
+        </div>
+        <div className="field">
+          <label htmlFor="comp-currency">Currency</label>
           <select
             id="comp-currency"
             name="currency"
@@ -924,9 +949,9 @@ function CompensationSection({
             ))}
           </select>
           {renderError('currency')}
-        </p>
-        <p>
-          <label htmlFor="comp-bonusTargetPercent">Bonus target percent (optional, 0 to 100)</label>{' '}
+        </div>
+        <div className="field">
+          <label htmlFor="comp-bonusTargetPercent">Bonus target percent (optional, 0 to 100)</label>
           <input
             id="comp-bonusTargetPercent"
             name="bonusTargetPercent"
@@ -941,12 +966,12 @@ function CompensationSection({
             aria-describedby={describedBy('bonusTargetPercent')}
           />
           {renderError('bonusTargetPercent')}
-        </p>
-        <p>
-          <button type="submit" disabled={saving}>
+        </div>
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary" disabled={saving}>
             Save compensation
           </button>
-        </p>
+        </div>
         <p role="status">{saving ? 'Saving compensation...' : message}</p>
       </form>
     </section>

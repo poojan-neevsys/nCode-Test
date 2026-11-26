@@ -12,7 +12,7 @@ interface NewHire {
   requisitionNumber: string | null;
 }
 
-type ListState =
+export type ListState =
   | { kind: 'loading' }
   | { kind: 'failed' }
   | { kind: 'ready'; items: NewHire[] };
@@ -33,7 +33,7 @@ function isNewHire(value: unknown): value is NewHire {
   );
 }
 
-async function loadNewHires(signal: AbortSignal): Promise<ListState> {
+export async function loadNewHires(signal: AbortSignal): Promise<ListState> {
   try {
     const response = await fetch('/api/new-hires', { signal, headers: portalHeaders() });
     if (!response.ok) {
@@ -57,7 +57,17 @@ export function statusLabel(status: string): string {
 
 // AB#status-workflow, criterion 10: the statuses offered by the list filter.
 // AB#edit-hold-release, criterion 13: on_hold and released are offered too.
-const STATUS_FILTERS = ['draft', 'in_review', 'returned', 'approved', 'on_hold', 'released'] as const;
+export const STATUS_FILTERS = ['draft', 'in_review', 'returned', 'approved', 'on_hold', 'released'] as const;
+
+// Visual design story, criteria 4 and 5: a status is shown as a coloured badge that always includes its text.
+// Each known status has its own colour class; an unknown status gets the neutral style.
+export function StatusBadge({ status }: { status: string }) {
+  if (status === '') {
+    return <>-</>;
+  }
+  const variant = (STATUS_FILTERS as readonly string[]).includes(status) ? status : 'unknown';
+  return <span className={`status-badge status-${variant}`}>{statusLabel(status)}</span>;
+}
 
 // The filter is kept in the address bar as ?status=. An unknown value means no filter.
 function readStatusFilter(): string {
@@ -104,15 +114,26 @@ export function NewHireListPage() {
     <main>
       <h1>New hires</h1>
       <p>
-        <Link to="/new-hires/new">Add new hire</Link>
+        <Link to="/new-hires/new" className="btn btn-primary">
+          Add new hire
+        </Link>
       </p>
-      {state.kind === 'loading' && <p role="status">Loading new hires...</p>}
+      {state.kind === 'loading' && <p role="status" className="state-loading">Loading new hires...</p>}
       {state.kind === 'failed' && <p role="alert">Could not load new hires. Try again later.</p>}
-      {state.kind === 'ready' && state.items.length === 0 && <p>No new hires yet.</p>}
+      {state.kind === 'ready' && state.items.length === 0 && (
+        <div className="empty-state">
+          <p>No new hires yet.</p>
+          <p>
+            <Link to="/new-hires/new" className="btn btn-primary">
+              Add the first new hire
+            </Link>
+          </p>
+        </div>
+      )}
       {state.kind === 'ready' && state.items.length > 0 && (
         <>
-          <p>
-            <label htmlFor="status-filter">Status</label>{' '}
+          <div className="toolbar">
+            <label htmlFor="status-filter">Status</label>
             <select id="status-filter" name="status" value={statusFilter} onChange={chooseStatus}>
               <option value="">All statuses</option>
               {STATUS_FILTERS.map((status) => (
@@ -121,10 +142,19 @@ export function NewHireListPage() {
                 </option>
               ))}
             </select>
-          </p>
+          </div>
           {visibleItems.length === 0 ? (
-            <p>{`No new hires with status ${statusLabel(statusFilter)}.`}</p>
+            // Visual design story, criterion 10: the filtered-empty state offers a next step.
+            <div className="empty-state">
+              <p>{`No new hires with status ${statusLabel(statusFilter)}.`}</p>
+              <p>
+                <Link to="/new-hires" className="btn btn-secondary">
+                  Show all statuses
+                </Link>
+              </p>
+            </div>
           ) : (
+            <div className="table-wrap">
             <table>
               <thead>
                 <tr>
@@ -147,11 +177,14 @@ export function NewHireListPage() {
                     <td>{item.department}</td>
                     <td>{item.requisitionNumber ?? '-'}</td>
                     <td>{item.startDate}</td>
-                    <td>{statusLabel(item.status)}</td>
+                    <td>
+                      <StatusBadge status={item.status} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </>
       )}

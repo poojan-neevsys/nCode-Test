@@ -1,0 +1,661 @@
+/*
+ * Visual design for the whole portal. Every colour, spacing step, font size, radius and shadow is
+ * defined once in :root below; the rules after it only use these variables.
+ * Visual design story, criterion 1.
+ */
+:root {
+  color-scheme: light;
+
+  /* Colours */
+  --color-page-bg: #f3f4f6;
+  --color-surface: #ffffff;
+  --color-text: #1f2937;
+  --color-text-muted: #4b5563;
+  --color-border: #e5e7eb;
+  --color-border-input: #6b7280;
+  --color-table-header: #f9fafb;
+  --color-row-hover: #eef2ff;
+  --color-primary: #3730a3;
+  --color-primary-hover: #312e81;
+  --color-primary-soft: #e0e7ff;
+  --color-on-primary: #ffffff;
+  --color-link: #3730a3;
+  --color-danger: #b91c1c;
+  --color-danger-hover: #991b1b;
+  --color-danger-text: #991b1b;
+  --color-danger-soft: #fef2f2;
+  --color-on-danger: #ffffff;
+  --color-warning-soft: #fffbeb;
+  --color-warning-border: #f59e0b;
+  --color-warning-text: #78350f;
+  --color-disabled-bg: #e5e7eb;
+  --color-disabled-text: #6b7280;
+  --color-transparent: transparent;
+
+  /* Status badges: each status has its own background and text colour (text contrast at least 4.5:1). */
+  --status-draft-bg: #e5e7eb;
+  --status-draft-text: #374151;
+  --status-in-review-bg: #fef3c7;
+  --status-in-review-text: #92400e;
+  --status-returned-bg: #fee2e2;
+  --status-returned-text: #991b1b;
+  --status-approved-bg: #dcfce7;
+  --status-approved-text: #166534;
+  --status-on-hold-bg: #ffedd5;
+  --status-on-hold-text: #9a3412;
+  --status-released-bg: #e0e7ff;
+  --status-released-text: #3730a3;
+  --status-unknown-bg: #f3f4f6;
+  --status-unknown-text: #374151;
+
+  /* Typography */
+  --font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.375rem;
+  --font-size-2xl: 1.75rem;
+  --line-height: 1.5;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.06);
+  --shadow-md: 0 4px 14px rgb(15 23 42 / 0.08);
+  --shadow-error: 0 0 0 1px var(--color-danger);
+
+  /* Sizes and layout */
+  --content-max-width: 60rem;
+  --control-height: 2.5rem;
+  --border-width: 1px;
+  --border-accent-width: 4px;
+  --focus-width: 3px;
+  --focus-offset: 2px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-page-bg);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height);
+  overflow-wrap: break-word;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--color-text);
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: var(--font-size-2xl);
+  margin: 0 0 var(--space-4);
+}
+
+h2 {
+  font-size: var(--font-size-xl);
+  margin: var(--space-6) 0 var(--space-3);
+}
+
+h3 {
+  font-size: var(--font-size-lg);
+  margin: 0 0 var(--space-3);
+}
+
+p {
+  margin: var(--space-3) 0;
+}
+
+a {
+  color: var(--color-link);
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Keyboard focus: a clear ring in the primary colour on every focusable element. Visual design story, criterion 11. */
+:focus-visible {
+  outline: var(--focus-width) solid var(--color-primary);
+  outline-offset: var(--focus-offset);
+}
+
+/* Shared header: portal name, main navigation and the development role switcher. Criterion 2. */
+.app-header {
+  background: var(--color-surface);
+  border-bottom: var(--border-width) solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.app-header-inner {
+  width: min(100% - 2 * var(--space-4), var(--content-max-width));
+  margin: 0 auto;
+  padding: var(--space-3) 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
+}
+
+.app-brand {
+  margin: 0;
+  color: var(--color-primary);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+}
+
+.app-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.app-nav a {
+  display: inline-block;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+}
+
+.app-nav a:hover {
+  background: var(--color-page-bg);
+  color: var(--color-text);
+}
+
+.app-nav a[aria-current='page'] {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.role-switcher {
+  margin: 0 0 0 auto;
+  padding: 0;
+  border: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.role-switcher legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+  font-weight: var(--font-weight-semibold);
+}
+
+.role-switcher label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-right: var(--space-4);
+  font-weight: var(--font-weight-medium);
+}
+
+/* Shared page layout: one white card, centred, with a maximum width. Criterion 2. */
+main {
+  width: min(100% - 2 * var(--space-4), var(--content-max-width));
+  margin: var(--space-5) auto;
+  padding: var(--space-5);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  box-sizing: border-box;
+}
+
+main section {
+  margin-top: var(--space-6);
+}
+
+/* Home page summary cards. Criterion 3. */
+.summary-grid {
+  list-style: none;
+  margin: var(--space-5) 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-4);
+}
+
+.summary-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.summary-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+  text-decoration: none;
+}
+
+.summary-count {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  line-height: 1.1;
+}
+
+.summary-label {
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Tables: header row, comfortable rows, hover state, and horizontal scrolling inside their own box. Criteria 4 and 9. */
+.table-wrap {
+  overflow-x: auto;
+  margin: var(--space-4) 0;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+table {
+  width: 100%;
+  min-width: 36rem;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+th {
+  background: var(--color-table-header);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+tbody tr:hover {
+  background: var(--color-row-hover);
+}
+
+/* Status badges: colour plus text, the same on every page. Criterion 4 and 5. */
+.status-badge {
+  display: inline-block;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--status-unknown-bg);
+  color: var(--status-unknown-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.status-draft {
+  background: var(--status-draft-bg);
+  color: var(--status-draft-text);
+}
+
+.status-in_review {
+  background: var(--status-in-review-bg);
+  color: var(--status-in-review-text);
+}
+
+.status-returned {
+  background: var(--status-returned-bg);
+  color: var(--status-returned-text);
+}
+
+.status-approved {
+  background: var(--status-approved-bg);
+  color: var(--status-approved-text);
+}
+
+.status-on_hold {
+  background: var(--status-on-hold-bg);
+  color: var(--status-on-hold-text);
+}
+
+.status-released {
+  background: var(--status-released-bg);
+  color: var(--status-released-text);
+}
+
+/* Buttons: primary for the main action, secondary for other actions, danger for Release and Return. Criterion 7. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-height);
+  padding: var(--space-2) var(--space-4);
+  border: var(--border-width) solid var(--color-transparent);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.btn:hover {
+  text-decoration: none;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.btn-secondary {
+  background: var(--color-surface);
+  border-color: var(--color-border-input);
+  color: var(--color-text);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--color-page-bg);
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: var(--color-on-danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-danger-hover);
+}
+
+.btn:disabled {
+  background: var(--color-disabled-bg);
+  border-color: var(--color-disabled-bg);
+  color: var(--color-disabled-text);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.button-row,
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+}
+
+/* Forms: labels above inputs, one input style with hover, focus and error states. Criterion 6. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-4);
+}
+
+label {
+  font-weight: var(--font-weight-semibold);
+}
+
+input:not([type='radio']):not([type='checkbox']),
+select,
+textarea {
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border-input);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  min-height: var(--control-height);
+  max-width: 100%;
+}
+
+textarea {
+  width: 100%;
+  min-height: 6rem;
+}
+
+.field > input,
+.field > select,
+.field > textarea {
+  width: 100%;
+}
+
+input:not([type='radio']):not([type='checkbox']):hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+
+input:not([type='radio']):not([type='checkbox']):focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: var(--color-primary);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background: var(--color-disabled-bg);
+  border-color: var(--color-disabled-bg);
+  color: var(--color-disabled-text);
+  cursor: not-allowed;
+}
+
+input[aria-invalid='true'],
+select[aria-invalid='true'],
+textarea[aria-invalid='true'] {
+  border-color: var(--color-danger);
+  box-shadow: var(--shadow-error);
+}
+
+input[type='radio'] {
+  accent-color: var(--color-primary);
+  margin: 0;
+}
+
+.field-error {
+  color: var(--color-danger-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.field-hint {
+  margin: 0 0 var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.toolbar label {
+  margin: 0;
+}
+
+/* Errors, warnings and status messages. Criterion 10. */
+[role='alert'],
+.form-error {
+  margin: var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+  border-left: var(--border-accent-width) solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.form-error p {
+  margin: 0;
+}
+
+.form-error ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+}
+
+.state-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+}
+
+.state-loading::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--color-border-input);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: portal-spin 0.8s linear infinite;
+}
+
+@keyframes portal-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state-loading::before {
+    animation-duration: 2.4s;
+  }
+
+  .btn {
+    transition: none;
+  }
+}
+
+.empty-state {
+  margin: var(--space-4) 0;
+  padding: var(--space-5);
+  text-align: center;
+  background: var(--color-table-header);
+  border: var(--border-width) dashed var(--color-border-input);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+}
+
+.empty-state p {
+  margin: var(--space-2) 0;
+}
+
+.banner {
+  margin: var(--space-4) 0;
+  padding: var(--space-4);
+  background: var(--color-warning-soft);
+  border-left: var(--border-accent-width) solid var(--color-warning-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-warning-text);
+}
+
+.banner h2 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-lg);
+}
+
+.banner p {
+  margin: 0;
+}
+
+/* Detail list: label and value side by side, long values wrap inside the card. */
+.details-list {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-4) 0;
+}
+
+.details-list dt {
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-semibold);
+}
+
+.details-list dd {
+  margin: 0;
+}
+
+/* Dialogs on the detail page: a raised card with a primary accent. */
+[role='dialog'] {
+  margin: var(--space-5) 0;
+  padding: var(--space-5);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-top: var(--border-accent-width) solid var(--color-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.letter-preview {
+  margin: var(--space-4) 0;
+  padding: var(--space-4);
+  white-space: pre-wrap;
+  background: var(--color-page-bg);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+@media (max-width: 480px) {
+  main {
+    padding: var(--space-4);
+  }
+
+  .details-list {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1) 0;
+  }
+
+  .details-list dt {
+    margin-top: var(--space-3);
+  }
+
+  .role-switcher {
+    margin-left: 0;
+  }
+}

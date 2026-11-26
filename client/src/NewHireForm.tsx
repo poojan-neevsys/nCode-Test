@@ -187,7 +187,7 @@ function NewHireFormBody({ editing, initialValues, initialRequisition }: FormBod
         error={fieldErrors.requisitionId}
         onSelect={selectRequisition}
       />
-      <p>
+      <div className="field">
         <label htmlFor="field-firstName">First name</label>{' '}
         <input
           id="field-firstName"
@@ -200,8 +200,8 @@ function NewHireFormBody({ editing, initialValues, initialRequisition }: FormBod
           aria-describedby={describedBy('firstName')}
         />
         {renderError('firstName')}
-      </p>
-      <p>
+      </div>
+      <div className="field">
         <label htmlFor="field-lastName">Last name</label>{' '}
         <input
           id="field-lastName"
@@ -214,8 +214,8 @@ function NewHireFormBody({ editing, initialValues, initialRequisition }: FormBod
           aria-describedby={describedBy('lastName')}
         />
         {renderError('lastName')}
-      </p>
-      <p>
+      </div>
+      <div className="field">
         <label htmlFor="field-personalEmail">Personal email</label>{' '}
         <input
           id="field-personalEmail"
@@ -228,8 +228,8 @@ function NewHireFormBody({ editing, initialValues, initialRequisition }: FormBod
           aria-describedby={describedBy('personalEmail')}
         />
         {renderError('personalEmail')}
-      </p>
-      <p>
+      </div>
+      <div className="field">
         <label htmlFor="field-jobTitle">Job title</label>{' '}
         <input
           id="field-jobTitle"
@@ -243,8 +243,8 @@ function NewHireFormBody({ editing, initialValues, initialRequisition }: FormBod
           aria-describedby={describedBy('jobTitle')}
         />
         {renderError('jobTitle')}
-      </p>
-      <p>
+      </div>
+      <div className="field">
         <label htmlFor="field-department">Department</label>{' '}
         <select
           id="field-department"
@@ -263,8 +263,8 @@ function NewHireFormBody({ editing, initialValues, initialRequisition }: FormBod
           ))}
         </select>
         {renderError('department')}
-      </p>
-      <p>
+      </div>
+      <div className="field">
         <label htmlFor="field-startDate">Start date</label>{' '}
         <input
           id="field-startDate"
@@ -276,13 +276,15 @@ function NewHireFormBody({ editing, initialValues, initialRequisition }: FormBod
           aria-describedby={describedBy('startDate')}
         />
         {renderError('startDate')}
-      </p>
-      <p>
-        <button type="submit" disabled={saving}>
+      </div>
+      <div className="form-actions">
+        <button type="submit" className="btn btn-primary" disabled={saving}>
           {editing ? 'Save changes' : 'Save new hire'}
-        </button>{' '}
-        <Link to={editing ? `/new-hires/${editing.id}` : '/new-hires'}>Cancel</Link>
-      </p>
+        </button>
+        <Link to={editing ? `/new-hires/${editing.id}` : '/new-hires'} className="btn btn-secondary">
+          Cancel
+        </Link>
+      </div>
       {saving && <p role="status">Saving...</p>}
     </form>
   );
@@ -364,7 +366,7 @@ function EditNewHirePage({ id }: { id: number }) {
   return (
     <main>
       <h1>Edit new hire</h1>
-      {state.kind === 'loading' && <p role="status">Loading new hire...</p>}
+      {state.kind === 'loading' && <p role="status" className="state-loading">Loading new hire...</p>}
       {state.kind === 'failed' && <p role="alert">Could not load this new hire. Try again later.</p>}
       {state.kind === 'notFound' && <p role="alert">New hire not found.</p>}
       {state.kind === 'ready' && !EDITABLE_STATUSES.includes(state.record.status) && (

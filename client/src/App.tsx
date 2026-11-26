@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import { NewHireDetailPage } from './NewHireDetail';
 import { NewHireFormPage } from './NewHireForm';
-import { NewHireListPage } from './NewHireList';
+import { NewHireListPage, STATUS_FILTERS, StatusBadge } from './NewHireList';
 import { currentPath, Link } from './navigation';
 import { getPortalRole, portalHeaders, setPortalRole, type PortalRole } from './role';
 import { RoleSwitcher } from './RoleSwitcher';
@@ -51,19 +51,52 @@ function HomePage() {
   return (
     <main>
       <h1>NeevSys HR Onboarding Portal</h1>
+      <p>Welcome. Follow each new hire from draft to release, and keep the letter templates up to date.</p>
       <p role="status" aria-live="polite">
         {health === null
           ? 'Checking service health...'
           : `Server status: ${health.status}. Database: ${health.database}.`}
       </p>
-      <p>
-        <Link to="/new-hires">New hires</Link>
-      </p>
-      <p>
-        <Link to="/templates">Letter templates</Link>
-      </p>
+
+      <h2>New hires by status</h2>
+      {/* Visual design story, criterion 3: one card per status, each linking to the list filtered by that status.
+          The per-status counts are not shown: no existing data source gives them on this page (see summary). */}
+      <ul className="summary-grid">
+        <li>
+          <Link to="/new-hires" className="summary-card">
+            <span className="summary-label">All new hires</span>
+          </Link>
+        </li>
+        {STATUS_FILTERS.map((status) => (
+          <li key={status}>
+            <Link to={`/new-hires?status=${encodeURIComponent(status)}`} className="summary-card">
+              <StatusBadge status={status} />
+            </Link>
+          </li>
+        ))}
+      </ul>
+
+      <div className="button-row">
+        <Link to="/new-hires" className="btn btn-secondary">
+          New hires
+        </Link>
+        <Link to="/templates" className="btn btn-secondary">
+          Letter templates
+        </Link>
+      </div>
     </main>
   );
+}
+
+// Visual design story, criterion 2: the navigation item for the page being shown.
+function navSection(path: string): string {
+  if (path === '/templates') {
+    return '/templates';
+  }
+  if (path === '/new-hires' || path.startsWith('/new-hires/')) {
+    return '/new-hires';
+  }
+  return '/';
 }
 
 // AB#new-hire-draft: the detail page path, /new-hires/<id>.
@@ -112,10 +145,34 @@ export function App() {
     page = <HomePage />;
   }
 
+  const section = navSection(path);
+
   return (
     <>
       <header className="app-header">
-        <RoleSwitcher role={role} onChange={changeRole} />
+        <div className="app-header-inner">
+          <p className="app-brand">NeevSys HR Onboarding Portal</p>
+          <nav aria-label="Main">
+            <ul className="app-nav">
+              <li>
+                <Link to="/" current={section === '/'}>
+                  Home
+                </Link>
+              </li>
+              <li>
+                <Link to="/new-hires" current={section === '/new-hires'}>
+                  New hires
+                </Link>
+              </li>
+              <li>
+                <Link to="/templates" current={section === '/templates'}>
+                  Templates
+                </Link>
+              </li>
+            </ul>
+          </nav>
+          <RoleSwitcher role={role} onChange={changeRole} />
+        </div>
       </header>
       {page}
     </>

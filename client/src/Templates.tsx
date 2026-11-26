@@ -137,6 +137,7 @@ export function TemplatesPage({ role }: { role: PortalRole }) {
         <p>
           <button
             type="button"
+            className="btn btn-primary"
             onClick={() => {
               setMessage('');
               setEditing({ kind: 'create' });
@@ -149,10 +150,16 @@ export function TemplatesPage({ role }: { role: PortalRole }) {
       <p role="status">{message}</p>
 
       <h2>Templates</h2>
-      {list.kind === 'loading' && <p role="status">Loading templates...</p>}
+      {list.kind === 'loading' && <p role="status" className="state-loading">Loading templates...</p>}
       {list.kind === 'failed' && <p role="alert">Could not load templates. Try again later.</p>}
-      {list.kind === 'ready' && items.length === 0 && <p>No letter templates yet.</p>}
+      {list.kind === 'ready' && items.length === 0 && (
+        <div className="empty-state">
+          <p>No letter templates yet.</p>
+          {canEdit && <p>Choose New template to add the first one.</p>}
+        </div>
+      )}
       {list.kind === 'ready' && items.length > 0 && (
+        <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -170,6 +177,7 @@ export function TemplatesPage({ role }: { role: PortalRole }) {
                   <td>
                     <button
                       type="button"
+                      className="btn btn-secondary"
                       aria-label={`Edit ${item.name}`}
                       onClick={() => {
                         setMessage('');
@@ -184,6 +192,7 @@ export function TemplatesPage({ role }: { role: PortalRole }) {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {canEdit && editing.kind !== 'none' && (
@@ -308,8 +317,8 @@ function TemplateForm({
         </p>
       )}
       <form onSubmit={handleSubmit} noValidate>
-        <p>
-          <label htmlFor="template-name">Template name (up to 100 characters)</label>{' '}
+        <div className="field">
+          <label htmlFor="template-name">Template name (up to 100 characters)</label>
           <input
             id="template-name"
             name="name"
@@ -321,12 +330,10 @@ function TemplateForm({
             aria-describedby={describedBy('name')}
           />
           {renderError('name')}
-        </p>
-        <p>
+        </div>
+        <div className="field">
           <label htmlFor="template-body">Letter text (plain text, up to 20000 characters)</label>
-          <br />
-          <span id="template-body-help">Allowed placeholders: {PLACEHOLDER_TOKENS}</span>
-          <br />
+          <span id="template-body-help" className="field-hint">Allowed placeholders: {PLACEHOLDER_TOKENS}</span>
           <textarea
             id="template-body"
             name="body"
@@ -337,17 +344,16 @@ function TemplateForm({
             aria-invalid={fieldErrors.body ? true : undefined}
             aria-describedby={describedBy('body', 'template-body-help')}
           />
-          <br />
           {renderError('body')}
-        </p>
-        <p>
-          <button type="submit" disabled={saving}>
+        </div>
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary" disabled={saving}>
             Save template
-          </button>{' '}
-          <button type="button" onClick={onCancel}>
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>
             Cancel
           </button>
-        </p>
+        </div>
         {saving && <p role="status">Saving template...</p>}
       </form>
     </section>
@@ -431,8 +437,8 @@ function PreviewSection({ templates }: { templates: Template[] }) {
     <section aria-labelledby="preview-heading">
       <h2 id="preview-heading">Preview</h2>
       <form onSubmit={handlePreview} noValidate>
-        <p>
-          <label htmlFor="preview-template">Template</label>{' '}
+        <div className="field">
+          <label htmlFor="preview-template">Template</label>
           <select
             id="preview-template"
             name="template"
@@ -446,9 +452,9 @@ function PreviewSection({ templates }: { templates: Template[] }) {
               </option>
             ))}
           </select>
-        </p>
-        <p>
-          <label htmlFor="preview-new-hire">New hire</label>{' '}
+        </div>
+        <div className="field">
+          <label htmlFor="preview-new-hire">New hire</label>
           <select
             id="preview-new-hire"
             name="newHire"
@@ -464,21 +470,21 @@ function PreviewSection({ templates }: { templates: Template[] }) {
                 </option>
               ))}
           </select>
-        </p>
-        {hires.kind === 'loading' && <p role="status">Loading new hires...</p>}
+        </div>
+        {hires.kind === 'loading' && <p role="status" className="state-loading">Loading new hires...</p>}
         {hires.kind === 'failed' && <p role="alert">Could not load new hires. Try again later.</p>}
-        <p>
-          <button type="submit" disabled={pending}>
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary" disabled={pending}>
             Show preview
           </button>
-        </p>
+        </div>
       </form>
 
-      {pending && <p role="status">Loading preview...</p>}
+      {pending && <p role="status" className="state-loading">Loading preview...</p>}
       {previewError && <p role="alert">{previewError}</p>}
       {result && (
         <>
-          <div role="region" aria-label="Letter preview" className="letter-preview" style={{ whiteSpace: 'pre-wrap' }}>
+          <div role="region" aria-label="Letter preview" className="letter-preview">
             {result.text}
           </div>
           {result.missing.length > 0 && (

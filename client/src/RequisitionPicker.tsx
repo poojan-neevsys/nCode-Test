@@ -131,12 +131,15 @@ export function RequisitionPicker({ selected, error, onSelect }: RequisitionPick
   }
 
   let status = '';
+  // Visual design story, criterion 10: a failed search is shown in the error colour, with the same text.
+  let statusClass = 'field-hint';
   if (selected !== null) {
     status = `Selected ${selected.number}. Job title and department are filled in from the requisition.`;
   } else if (search.kind === 'loading') {
     status = 'Searching requisitions...';
   } else if (search.kind === 'failed') {
     status = 'Could not search requisitions. Try again.';
+    statusClass = 'field-error';
   } else if (search.kind === 'ready' && searching) {
     status =
       items.length === 0
@@ -150,8 +153,8 @@ export function RequisitionPicker({ selected, error, onSelect }: RequisitionPick
 
   return (
     <>
-      <p>
-        <label htmlFor="field-requisitionId">Requisition</label>{' '}
+      <div className="field">
+        <label htmlFor="field-requisitionId">Requisition</label>
         <input
           id="field-requisitionId"
           name="requisitionId"
@@ -178,8 +181,8 @@ export function RequisitionPicker({ selected, error, onSelect }: RequisitionPick
             {error}
           </span>
         )}
-      </p>
-      <p id="requisition-hint">
+      </div>
+      <p id="requisition-hint" className="field-hint">
         {selected === null
           ? 'Type at least two characters of the number or job title to find an open requisition. Optional.'
           : selected.hiringManagerName === ''
@@ -203,7 +206,7 @@ export function RequisitionPicker({ selected, error, onSelect }: RequisitionPick
           ))}
         </ul>
       )}
-      <p role="status">{status}</p>
+      <p role="status" className={statusClass}>{status}</p>
     </>
   );
 }
